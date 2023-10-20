@@ -9,14 +9,16 @@ Created on Tue Sep 12 19:34:20 2023
 import pandas as pd
 import numpy as np
 
-
 def import_data_local():
-    import pandas as pd
     file_path = '/Users/patricksweeney/growth/03_Product/04_Engagement states/01_Static cluster/User data.xlsx'
     data = pd.read_excel(file_path)
     return data
 
 data = import_data_local()
+
+# # Filter out rows where 'role' is equal to 'VIEWER'
+data = data[data['role'] != 'VIEWER']
+
 
 
 
@@ -45,6 +47,8 @@ def find_missing_values(data):
     print(missing_values)
     
     
+find_missing_values(data)
+
 
 
 def impute_missing_values(data):
@@ -52,35 +56,45 @@ def impute_missing_values(data):
     import pandas as pd
     from sklearn.impute import SimpleImputer
     
+    # Create a copy to avoid in-place modifications
+    data_copy = data.copy()
+    
     # Drop columns with all missing values
-    data.dropna(axis=1, how='all', inplace=True)
+    data_copy.dropna(axis=1, how='all', inplace=True)
     
     # Replace infinities with NaNs
-    data.replace([np.inf, -np.inf], np.nan, inplace=True)
+    data_copy.replace([np.inf, -np.inf], np.nan, inplace=True)
     
     # Create an imputer instance with median strategy
     imputer = SimpleImputer(strategy='median')
     
     # Extract numerical columns
-    data_num = data.select_dtypes(include=[np.number])
+    data_num = data_copy.select_dtypes(include=[np.number])
     
-    # Fit the imputer to the numerical data
+    # Fit the imputer to the numerical data with NaNs
     imputer.fit(data_num)
     
     # Transform the numerical data with the imputer
     data_num_imputed = imputer.transform(data_num)
     
     # Convert the imputed data back to a DataFrame
-    data_num_imputed_df = pd.DataFrame(data_num_imputed, columns=data_num.columns)
+    data_num_imputed_df = pd.DataFrame(data_num_imputed, columns=data_num.columns, index=data_num.index)
     
-    # Replace the original numerical columns with the imputed ones
-    data[data_num.columns] = data_num_imputed_df
+    # Replace only the NaNs in the original DataFrame with the imputed values
+    for col in data_num.columns:
+        data_copy.loc[data_num[col].isna(), col] = data_num_imputed_df.loc[data_num[col].isna(), col]
     
-    return data
+    return data_copy
+
+# Example usage (replace 'data' with your DataFrame)
+# imputed_data = impute_missing_values(data)
 
 find_missing_values(data)
 
 data = impute_missing_values(data)
+
+find_missing_values(data)
+
 calculate_sparsity(data)
 
 
@@ -103,7 +117,7 @@ summary_original = eda_fivenum(data)
 
 
 
-#%% Preprocess
+#%% Feature engineering
 def usage_lambdas(data):
     import pandas as pd
     
@@ -131,8 +145,142 @@ data = impute_missing_values(data)
 summary_lambdas = eda_fivenum(data)
 
 
+#%% Distribution (log log plots)
 
 
+# Define a custom tick formatter to display percentages
+def percentage_formatter(x, pos):
+    return f'{x:.0f}%'
+
+# Custom label formatting function
+def format_label(label):
+    # Replace underscores with spaces, apply title case, and remove ' Rate' from the end
+    return label.replace('_', ' ').title().replace(' Rate', '')
+
+def adoption(data):
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    import numpy as np
+    import pandas as pd
+    from matplotlib.ticker import FuncFormatter
+    
+    filtered_data = data
+
+    # Filter out rows where 'role' is equal to 'VIEWER'
+    filtered_data = data[data['role'] != 'VIEWER']
+    
+
+
+    # Drop constant and non-numeric columns
+    filtered_data = filtered_data.select_dtypes(include=['number']).loc[:, filtered_data.nunique() > 1]
+
+    # Remove 'duration' if it exists from filtered_data
+    if 'duration' in filtered_data:
+        filtered_data = filtered_data.drop(columns=['duration'], errors='ignore')
+
+    # For each column, calculate the percentage of rows where value > 0
+    # Store and plot in a bar plot
+    percentages = (filtered_data > 0).mean() * 100
+
+    # Set font to Helvetica
+    plt.rcParams['font.family'] = 'Helvetica'
+
+    # Rename columns using the custom label formatting function
+    percentages.index = percentages.index.map(format_label)
+
+    # Sort the percentages in descending order
+    percentages = percentages.sort_values(ascending=False)
+
+    # Create a bar plot of adoption percentages
+    plt.figure(figsize=(10, 5))
+    sns.barplot(x=percentages.values, y=percentages.index, palette="RdBu_r", order=percentages.index)
+    plt.xlabel('Adoption Percentage')
+    plt.ylabel('Features')
+    plt.title('Adoption Percentage for Each Feature')
+
+    # Use the custom percentage formatter for x-axis
+    plt.gca().xaxis.set_major_formatter(FuncFormatter(percentage_formatter))
+
+    plt.show()
+
+# Call the function
+adoption(data)
+
+
+
+
+
+# Define a custom tick formatter to display real numbers
+def real_numbers(x, pos):
+    return str(int(10**x))
+
+def loglog(data):
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    import numpy as np
+    import pandas as pd
+    from matplotlib.ticker import FuncFormatter
+    
+    # Drop constant and non-numeric columns
+    filtered_data = data.select_dtypes(include=['number']).loc[:, data.nunique() > 1]
+    
+    # Extract the 'duration' column for coloring
+    duration_values = data['duration']
+    
+    # Remove 'duration' if it exists from filtered_data
+    if 'duration' in filtered_data:
+        filtered_data = filtered_data.drop(columns=['duration'], errors='ignore')
+    
+    # Rename columns to 'Title Case' without underscores
+    renamed_columns = {col: col.replace('_', ' ').title() for col in filtered_data.columns}
+    filtered_data.rename(columns=renamed_columns, inplace=True)
+    
+    # Number of rows and columns for subplots
+    n = len(filtered_data.columns)
+    n_cols = 4  # You can adjust the number of columns here
+    n_rows = int(np.ceil(n / n_cols))
+    
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols * 5, n_rows * 5), squeeze=False)
+    axes = axes.flatten()
+    
+    # Loop through each variable for log-log plot
+    for i, col in enumerate(filtered_data.columns):
+        ax = axes[i]
+        non_zero_values = filtered_data[col][filtered_data[col] > 0]
+        colors = duration_values[filtered_data[col] > 0]
+        
+        # Add jitter to x and y values
+        jitter = 0  # You can adjust the amount of jitter
+        x_jitter = np.random.uniform(-jitter, jitter, len(non_zero_values))
+        y_jitter = np.random.uniform(-jitter, jitter, len(non_zero_values))
+        
+        sns.scatterplot(x=np.log10(1 + np.arange(len(non_zero_values))) + x_jitter, 
+                        y=np.log10(1 + np.sort(non_zero_values)[::-1]) + y_jitter, 
+                        ax=ax, edgecolor='none', hue=colors, palette="RdBu_r", legend=False)
+        ax.set_title(col)
+        ax.set_xlabel('User rank')
+        ax.set_ylabel('Usage rate')
+        
+        # Set x and y axis tick locators and formatters in log10 format
+        ax.xaxis.set_major_locator(plt.FixedLocator(np.log10([1, 10, 100, 1000, 10000])))
+        ax.xaxis.set_major_formatter(FuncFormatter(real_numbers))
+        ax.yaxis.set_major_locator(plt.FixedLocator(np.log10([1, 10, 100, 1000, 10000])))
+        ax.yaxis.set_major_formatter(FuncFormatter(real_numbers))
+        
+    # Remove extra subplots
+    for i in range(len(filtered_data.columns), len(axes)):
+        fig.delaxes(axes[i])
+    
+    plt.tight_layout()
+    plt.show()
+
+# Call the function
+loglog(data)
+
+
+
+
+#%% Preprocessing
 
 def log_transform(data, leave):
     import pandas as pd
@@ -192,6 +340,10 @@ def eda_pair_plot(data):
     import pandas as pd
     import seaborn as sns
     import numpy as np
+    import matplotlib.pyplot as plt
+    
+    # Set font to Helvetica
+    plt.rcParams['font.family'] = 'Helvetica'
     
     # Replace infinite values with NaN
     data.replace([np.inf, -np.inf], np.nan, inplace=True)
@@ -199,21 +351,42 @@ def eda_pair_plot(data):
     # Select only numeric columns
     numeric_data = data.select_dtypes(include=[float, int])
     
-    # Generate pairplot with red LOESS fit
-    sns.pairplot(numeric_data)
+    # Rename columns to 'Title Case' without underscores
+    renamed_columns = {col: col.replace('_', ' ').title() for col in numeric_data.columns}
+    numeric_data.rename(columns=renamed_columns, inplace=True)
+    
+    # Generate pairplot with different colors and linear regression line
+    g = sns.pairplot(numeric_data, kind='reg', plot_kws={'line_kws':{'color':'red'}, 'scatter_kws': {'alpha': 0.5}})
+    
+    # Update plot labels to 'Title Case'
+    for ax in plt.gcf().axes:
+        ax.set_xlabel(ax.get_xlabel().replace('_', ' ').title())
+        ax.set_ylabel(ax.get_ylabel().replace('_', ' ').title())
+        
+    # Add a title to the plot
+    plt.subplots_adjust(top=0.9)
+    g.fig.suptitle('Distributions and Relationship Between Feature Usage', fontsize=16)
+    
+    plt.show()
 
-# Run the function
+
 eda_pair_plot(data)
-
-
 
 def eda_correlation_matrix(data):
     import pandas as pd
     import seaborn as sns
     import matplotlib.pyplot as plt
+    import numpy as np
+    
+    # Set font to Helvetica
+    plt.rcParams['font.family'] = 'Helvetica'
     
     # Drop constant and non-numeric columns
     filtered_data = data.select_dtypes(include=['number']).loc[:, data.nunique() > 1]
+    
+    # Rename columns to 'Title Case' without underscores
+    renamed_columns = {col: col.replace('_', ' ').title() for col in filtered_data.columns}
+    filtered_data.rename(columns=renamed_columns, inplace=True)
     
     # Compute the correlation matrix
     corr = filtered_data.corr()
@@ -223,82 +396,164 @@ def eda_correlation_matrix(data):
     corr_copy['sum'] = corr_copy.abs().sum()
     sorted_columns = corr_copy.sort_values(by='sum', ascending=False).index
     
-    # Now fetch the sorted columns and rows without 'sum'
+    # Fetch sorted columns and rows without 'sum'
     sorted_corr = corr.loc[sorted_columns, sorted_columns]
     
-    # Set up the matplotlib figure with a reasonable size
+    # Set up the matplotlib figure for the heatmap
     plt.figure(figsize=(10, 8))
     
-    # Draw the heatmap with a custom color map and annotations rounded to 1 decimal place
+    # Draw the heatmap
     sns.heatmap(sorted_corr, cmap="RdBu", vmin=-1, vmax=1, annot=True, fmt=".1f")
     
-    # Show the plot
+    plt.xticks(rotation=90)
+    plt.yticks(rotation=0)
+    
+    # Show the heatmap
     plt.show()
+    
+    # Flatten the upper triangle of the sorted_corr matrix
+    upper_triangle = np.triu(sorted_corr, k=1)
+    upper_triangle_flat = upper_triangle.flatten()
+    
+    # Remove zeros and sort
+    non_zero = upper_triangle_flat[upper_triangle_flat != 0]
+    sorted_indices = np.argsort(np.abs(non_zero))[::-1]
+    
+    # Find the top 10 pairs
+    top_10_pairs = [(np.unravel_index(sorted_indices[i], upper_triangle.shape), non_zero[sorted_indices[i]]) for i in range(min(10, len(sorted_indices)))]
+    
+    # Prepare data for the bar plot
+    labels = [f"{sorted_columns[pair[0][0]]}, {sorted_columns[pair[0][1]]}" for pair in top_10_pairs]
+    values = [pair[1] for pair in top_10_pairs]
+    
+    # Create bar plot with Helvetica font and RdBu color map
+    plt.figure(figsize=(10, 8))
+    sns.barplot(x=values, y=labels, palette="RdBu_r")
+    plt.xlabel('Correlation')
+    plt.title('Top 10 Correlated Feature Pairs')
+    
+    # Show the bar plot
+    plt.show()
+
 
 
 eda_correlation_matrix(data)
 
 
-
+# Updated pca function incorporating color and size based on feature's contribution to total variance in the scatter plot
+# Final pca function with zoomed-in loading plot
+# Updating pca function to remove grid lines and adjust axis zoom
+# Updating pca function to set major gridlines at the middle of each axis range
 def pca(data):
     from sklearn.decomposition import PCA
+    import seaborn as sns
     import matplotlib.pyplot as plt
     import numpy as np
     import pandas as pd
     
-    numeric_data = data.select_dtypes(include=[np.number])
-    normalized_cols = [col for col in numeric_data.columns 
-                        if np.isclose(numeric_data[col].mean(), 0, atol=1e-2) 
-                        and np.isclose(numeric_data[col].std(), 1, atol=1e-2)]
+    # Set font to Helvetica
+    plt.rcParams['font.family'] = 'Helvetica'
     
-    if not normalized_cols:
-        print("No normalized columns found. Check the data.")
+    # Drop constant and non-numeric columns
+    filtered_data = data.select_dtypes(include=['number']).loc[:, data.nunique() > 1]
+    
+    # Remove 'duration' if it exists
+    filtered_data = filtered_data.drop(columns=['duration'], errors='ignore')
+    
+    # If no suitable columns, exit
+    if filtered_data.shape[1] == 0:
+        print("No suitable numeric columns found that vary. Exiting.")
         return
     
-    filtered_data = numeric_data[normalized_cols]
-    
+    # Rename columns to 'Title Case' without underscores
+    renamed_columns = {col: col.replace('_', ' ').title() for col in filtered_data.columns}
+    filtered_data.rename(columns=renamed_columns, inplace=True)
+
+    # Apply PCA
     pca = PCA()
     pca_result = pca.fit_transform(filtered_data)
     
-    # Explained Variance
-    explained_var_ratio = pca.explained_variance_ratio_
+    # Explained Variance Bar Plot
     plt.figure(figsize=(10, 5))
-    plt.bar(range(len(explained_var_ratio)), explained_var_ratio)
-    plt.xlabel('Principal Components')
-    plt.ylabel('Explained Variance')
-    plt.title('Explained Variance by Each Component')
+    sns.barplot(x=np.arange(1, len(pca.explained_variance_ratio_)+1), y=pca.explained_variance_ratio_ * 100, palette="RdBu_r")
+    plt.xlabel('Superfeatures')
+    plt.ylabel('Explained Variance (%)')
+    plt.title('Explained Variance By Each Superfeature')
     plt.show()
     
     # Scree Plot
     plt.figure(figsize=(10, 5))
-    plt.plot(pca.explained_variance_, 'o-')
-    plt.title('Scree Plot')
-    plt.xlabel('Principal Component')
+    sns.lineplot(x=np.arange(1, len(pca.explained_variance_)+1), y=pca.explained_variance_, marker='o', palette="RdBu_r")
+    plt.xlabel('Superfeature')
     plt.ylabel('Eigenvalue')
+    plt.title('Scree Plot')
     plt.show()
     
-    # Loading Plot (as vectors)
+    # Loading Plot as Dots with Contribution to Total Variance
     plt.figure(figsize=(10, 10))
     components = pd.DataFrame(pca.components_, columns=filtered_data.columns)
-    for i, (x, y) in enumerate(zip(components.iloc[0, :], components.iloc[1, :])):
-        plt.arrow(0, 0, x, y, head_width=0.05, head_length=0.1, fc='k', ec='k')
-        plt.text(x * 1.2, y * 1.2, filtered_data.columns[i], color='r')
-    plt.xlim([-1, 1])
-    plt.ylim([-1, 1])
-    plt.xlabel('Principal Component 1')
-    plt.ylabel('Principal Component 2')
-    plt.title('Loading Plot as Vectors')
-    plt.grid()
+    contributions = components.iloc[0, :]**2 * pca.explained_variance_ratio_[0] + components.iloc[1, :]**2 * pca.explained_variance_ratio_[1]
+    normalized_contributions = contributions / np.max(contributions)
+    
+    # Dynamic range for x and y axes, with a small padding to make sure dots are fully visible
+    x_max, x_min = components.iloc[0, :].max() + 0.1, components.iloc[0, :].min() - 0.1
+    y_max, y_min = components.iloc[1, :].max() + 0.1, components.iloc[1, :].min() - 0.1
+    
+    for i, (x, y, contrib) in enumerate(zip(components.iloc[0, :], components.iloc[1, :], normalized_contributions)):
+        plt.scatter(x, y, s=contrib * 500, c=[plt.cm.RdBu_r(1 - contrib)])  # Size and color by normalized contribution, color inverted
+        plt.annotate(filtered_data.columns[i], (x, y), textcoords="offset points", xytext=(0,10), ha='center', color='k')
+    
+    # Add lines to divide plot into half for each axis
+    plt.axhline(y=(y_max + y_min) / 2, color='black', linewidth=0.8)
+    plt.axvline(x=(x_max + x_min) / 2, color='black', linewidth=0.8)
+        
+    plt.xlim([x_min, x_max])  # Dynamic zoom-in with padding
+    plt.ylim([y_min, y_max])  # Dynamic zoom-in with padding
+    plt.xlabel('Superfeature 1 Loading')
+    plt.ylabel('Superfeature 2 Loading')
+    plt.title('Superfeature Loadings')
+    plt.grid(False)  # Removing other grid lines
+    plt.show()
+
+    # Other plots and outputs would follow here
+    
+    # Compute the contributions to PC1, PC2, and total variance
+    pc1_contributions = components.iloc[0, :] ** 2 * pca.explained_variance_ratio_[0]
+    pc2_contributions = components.iloc[1, :] ** 2 * pca.explained_variance_ratio_[1]
+    total_contributions = pc1_contributions + pc2_contributions
+
+    # Contribution to PC1
+    plt.figure(figsize=(15, 5))
+    sns.barplot(x=filtered_data.columns, y=pc1_contributions, palette="RdBu_r", order=pc1_contributions.sort_values(ascending=False).index)
+    plt.xticks(rotation=90)
+    plt.xlabel('Features')
+    plt.ylabel('Contribution to Superfeature 1 (%)')
+    plt.title('Contribution to Superfeature 1')
     plt.show()
     
-    # Print top features by loading for the first two principal components
-    print("Top Features by Loading for Principal Component 1:")
-    print(components.iloc[0, :].sort_values(ascending=False)[:5])
-    print("Top Features by Loading for Principal Component 2:")
-    print(components.iloc[1, :].sort_values(ascending=False)[:5])
+    # Contribution to PC2
+    plt.figure(figsize=(15, 5))
+    sns.barplot(x=filtered_data.columns, y=pc2_contributions, palette="RdBu_r", order=pc2_contributions.sort_values(ascending=False).index)
+    plt.xticks(rotation=90)
+    plt.xlabel('Features')
+    plt.ylabel('Contribution to Superfeature 2 (%)')
+    plt.title('Contribution to Superfeature 2')
+    plt.show()
+    
+    # Contribution to Total Variance
+    plt.figure(figsize=(15, 5))
+    sns.barplot(x=filtered_data.columns, y=total_contributions, palette="RdBu_r", order=total_contributions.sort_values(ascending=False).index)
+    plt.xticks(rotation=90)
+    plt.xlabel('Features')
+    plt.ylabel('Contribution to Total Variance (%)')
+    plt.title('Contribution to Total Variance')
+    plt.show()
+
+# The loading plot is now divided into half for each axis by a single line, placed at the middle of each axis range.
+# Other grid lines are removed and axis limits adjusted for better dot visibility.
 
 
-pca(data = data)
+pca(data)
 
 
 
@@ -332,210 +587,161 @@ data = correlation_selector(data, corr_threshold = 0.75)
 
 #%% Model selection
 
-def find_optimal_clusters_kmedians(data, max_k):
-    from sklearn_extra.cluster import KMedoids
-    from sklearn.metrics import silhouette_score
-    import numpy as np
-    import matplotlib.pyplot as plt
-    
-    """
-    Find the optimal number of clusters using KMedians, Elbow Method, and Silhouette Method.
-    """
-    # Filter for numeric columns
-    numeric_data = data.select_dtypes(include=[np.number])
-    
-    # Further filter for normalized columns
-    normalized_cols = [col for col in numeric_data.columns 
-                       if np.isclose(numeric_data[col].mean(), 0, atol=1e-2) 
-                       and np.isclose(numeric_data[col].std(), 1, atol=1e-2)]
-    
-    if not normalized_cols:
-        print("No suitable columns for clustering.")
-        return
-    
-    # Filter data to include only normalized columns
-    filtered_data = numeric_data[normalized_cols]
-    
-    # Elbow Method
-    inertia = []
-    for k in range(1, max_k+1):
-        kmedians = KMedoids(n_clusters=k, random_state=1).fit(filtered_data)
-        inertia.append(kmedians.inertia_)
-        
-    plt.figure()
-    plt.plot(range(1, max_k+1), inertia, marker='o')
-    plt.title('Elbow Method')
-    plt.xlabel('Number of clusters')
-    plt.ylabel('Inertia')
-    plt.show()
 
-    # Silhouette Method
-    sil_scores = []
-    for k in range(2, max_k+1):  # Silhouette analysis starts with at least 2 clusters
-        kmedians = KMedoids(n_clusters=k, random_state=1).fit(filtered_data)
-        score = silhouette_score(filtered_data, kmedians.labels_)
-        sil_scores.append(score)
-        
-    plt.figure()
-    plt.plot(range(2, max_k+1), sil_scores, marker='o')
-    plt.title('Silhouette Method')
-    plt.xlabel('Number of clusters')
-    plt.ylabel('Silhouette Score')
-    plt.show()
-
-
-
-# Call the function
-find_optimal_clusters_kmedians(data, max_k=10)
 
 
 #%% Train kmeans
 
-def perform_clustering(data, variables, algorithm='KMeans', n_clusters=3, do_scaling=True, do_pca=True, plot=True, **kwargs):
+# Adding axis labels to the clustering plot for Principal Component 1 and Principal Component 2.
+
+def perform_clustering(data, pca, n_clusters, algorithm='KMeans', do_scaling=True, do_pca=True, plot=True, **kwargs):
     import pandas as pd
+    import numpy as np
     from sklearn.preprocessing import StandardScaler
     from sklearn.decomposition import PCA
     from sklearn.cluster import KMeans, AgglomerativeClustering, AffinityPropagation, MeanShift, SpectralClustering, DBSCAN, Birch
     from sklearn_extra.cluster import KMedoids
     from sklearn.mixture import GaussianMixture
     from sklearn.metrics import silhouette_score
-    from hdbscan import HDBSCAN
     import matplotlib.pyplot as plt
-    
-    # Filter only numeric columns and convert to matrix
-    numeric_data = data[variables].select_dtypes(include=['number']).values
-    
+    from hdbscan import HDBSCAN
+    from scipy.cluster.hierarchy import dendrogram, linkage
+
+    plt.rcParams['font.family'] = 'Helvetica'
+
+    # Filter only numeric and varying columns, excluding 'Duration'
+    numeric_data = data.select_dtypes(include=[np.number]).loc[:, data.nunique() > 1]
+    if 'Duration' in numeric_data.columns:
+        numeric_data.drop('Duration', axis=1, inplace=True)
+
+    if numeric_data.empty:
+        print("No suitable columns for clustering.")
+        return None, None, None
+
     # Data scaling
     if do_scaling:
         scaler = StandardScaler()
         numeric_data = scaler.fit_transform(numeric_data)
-    
+
     # Dimensionality reduction
     if do_pca:
-        pca = PCA(n_components=2)
+        pca = PCA(n_components=pca)
         reduced_data = pca.fit_transform(numeric_data)
     else:
         reduced_data = numeric_data
-    
-    # Clustering
-    if algorithm == 'KMeans':
-        model = KMeans(n_clusters=n_clusters, **kwargs)
-    elif algorithm == 'KMedoids':
-        model = KMedoids(n_clusters=n_clusters, **kwargs)
-    elif algorithm == 'Agglomerative':
-        model = AgglomerativeClustering(n_clusters=n_clusters, **kwargs)
-    elif algorithm == 'AffinityPropagation':
-        model = AffinityPropagation(**kwargs)
-    elif algorithm == 'MeanShift':
-        model = MeanShift(**kwargs)
-    elif algorithm == 'SpectralClustering':
-        model = SpectralClustering(n_clusters=n_clusters, **kwargs)
-    elif algorithm == 'DBSCAN':
-        model = DBSCAN(**kwargs)
-    elif algorithm == 'HDBSCAN':
-        model = HDBSCAN(**kwargs)
-    elif algorithm == 'GaussianMixture':
-        model = GaussianMixture(n_components=n_clusters, **kwargs)
-    elif algorithm == 'Birch':
-        model = Birch(n_clusters=n_clusters, **kwargs)
-    else:
+
+    # Algorithm selection
+    algorithms = {
+        'KMeans': KMeans,
+        'KMedoids': KMedoids,
+        'Agglomerative': AgglomerativeClustering,
+        'AffinityPropagation': AffinityPropagation,
+        'MeanShift': MeanShift,
+        'SpectralClustering': SpectralClustering,
+        'DBSCAN': DBSCAN,
+        'HDBSCAN': HDBSCAN,
+        'GaussianMixture': GaussianMixture,
+        'Birch': Birch
+    }
+
+    if algorithm not in algorithms:
         raise ValueError("Invalid clustering algorithm")
-    
+
+    if algorithm == 'HDBSCAN':
+        model = algorithms[algorithm](min_cluster_size=n_clusters, **kwargs)
+    else:
+        model = algorithms[algorithm](n_clusters=n_clusters, **kwargs)
+
     model.fit(reduced_data)
+
     labels = model.labels_ if hasattr(model, 'labels_') else model.predict(reduced_data)
-    
+
     # Metrics
-    silhouette_avg = silhouette_score(reduced_data, labels) if len(set(labels)) > 1 else "N/A"
-    
+    if len(set(labels)) > 1:
+        silhouette_avg = round(silhouette_score(reduced_data, labels), 2)
+    else:
+        silhouette_avg = "N/A"
+
     # Add cluster labels to data
     clustered_data = data.copy()
-    clustered_data['Cluster label'] = labels  # Rename the cluster label column
-    
+    clustered_data['Cluster label'] = labels
+
     # Plotting
     if plot:
         plt.figure(figsize=(8, 8))
-        plt.scatter(reduced_data[:, 0], reduced_data[:, 1], c=labels, cmap='rainbow', alpha=0.5)
-        plt.title(f'{algorithm} Clustering (k={n_clusters})\nSilhouette Score: {silhouette_avg}')
+        plt.scatter(reduced_data[:, 0], reduced_data[:, 1], c=labels, cmap='viridis', alpha=0.5)
+        plt.title(f'{algorithm} Clustering ({n_clusters} Segments)\nSilhouette Score: {silhouette_avg}')
+        plt.xlabel('Superfeature 1')  # Labeling the x-axis
+        plt.ylabel('Superfeature 2')  # Labeling the y-axis
         plt.show()
-    
+
+        # Plot dendrogram for hierarchical clustering methods
+        if algorithm in ['Agglomerative', 'HDBSCAN']:
+            linked = linkage(reduced_data, 'single')
+            plt.figure(figsize=(15, 7))
+            dendrogram(linked, truncate_mode='lastp', p=12, color_threshold=1, orientation='top', distance_sort='descending', show_leaf_counts=True, cmap='RdBu')
+            plt.title(f'{algorithm} Dendrogram')
+            plt.xlabel('Sample index or (cluster size)')
+            plt.ylabel('Distance')
+            plt.show()
+
     # Cluster summary
-    cluster_summary = clustered_data.groupby('cluster_label').median(numeric_only=True)
-    
+    cluster_summary = clustered_data.groupby('Cluster label').median(numeric_only=True)
+
     return clustered_data, silhouette_avg, cluster_summary
 
-
-variables = ['note_rate', 'highlight_rate', 'insight_rate', 'invite_rate', 'shared_object_rate']
-clustered_data, silhouette_avg, cluster_summary = perform_clustering(data, variables, do_pca=True, algorithm='Agglomerative', n_clusters=3)
-
-
-
+# Example usage for testing (replace 'data' with your DataFrame)
+clustered_data, silhouette_avg, cluster_summary = perform_clustering(data=data, pca=2, n_clusters=3, algorithm='Agglomerative', do_pca=True)
 
 
 #%% Interpretation
 
-
-# Function to plot clusters with user-specified figure size and DPI settings
-def plot_clusters(clustered_data, plot_type='scatter', variables=None):
-    import seaborn as sns
+# Modified function to plot clusters
+def plot_clusters(clustered_data, plot_type='scatter'):
     import matplotlib.pyplot as plt
+    import seaborn as sns
+    import pandas as pd
     
-    # Function to format labels
-    def format_label(label):
-        return label.replace('_', ' ').capitalize()
-    
-    # Set the color palette and font style
-    sns.set_palette("viridis")
     plt.rcParams['font.family'] = 'Helvetica'
-    sns.set_style("whitegrid", {'axes.grid' : False})
     
-    # Format variable names
-    if variables is None:
-        variables = clustered_data.select_dtypes(include=['number']).columns.tolist()
-    formatted_vars = [format_label(var) for var in variables]
+    # Identify numeric variables
+    numeric_vars = clustered_data.select_dtypes(include=['number']).columns.tolist()
     
-    # Rename columns in DataFrame for plotting
-    clustered_data.rename(columns={old: new for old, new in zip(variables, formatted_vars)}, inplace=True)
+    # Make sure only numeric variables are used for median calculation
+    if 'Cluster label' in numeric_vars:
+        numeric_vars.remove('Cluster label')
     
-    plt.figure(1, figsize=(20, 20), dpi=72)  # Set figure size and DPI
+    # Rename clusters based on their median values
+    try:
+        cluster_summary = clustered_data.groupby('Cluster label').median(numeric_only=True)
+        sorted_clusters = cluster_summary.apply(lambda x: x.median(), axis=1).sort_values(ascending=False).index
+        rename_dict = {old: f'Segment {chr(65 + new)}' for new, old in enumerate(sorted_clusters)}
+        clustered_data['Cluster label'] = clustered_data['Cluster label'].map(rename_dict)
+    except Exception as e:
+        print(f"An error occurred while renaming clusters: {e}")
     
     if plot_type == 'scatter':
-        sns.pairplot(data=clustered_data, hue='Cluster label', vars=formatted_vars, diag_kind='kde', palette="viridis", plot_kws={'alpha': 0.5})
-        plt.suptitle('Customer Behavior by Segment', fontsize=20, fontweight='bold', y=1.04)
+        sns.pairplot(data=clustered_data, hue='Cluster label', vars=numeric_vars, diag_kind='kde', palette="viridis", plot_kws={'alpha': 0.5})
+        plt.suptitle('Scatter Plots by Segment', y=1.02)
     
     elif plot_type == 'heatmap':
-        cluster_means = clustered_data.groupby('Cluster label').mean()[formatted_vars]
-        sns.heatmap(cluster_means, annot=True, cmap='viridis')
-        plt.title('Average Customer Metrics by Segment', fontsize=20, fontweight='bold', pad=20)
-        
-    elif plot_type == 'box':
-        for var in formatted_vars:
-            sns.boxplot(x='Cluster label', y=var, data=clustered_data, palette="viridis")
-            plt.xlabel('Cluster Label')
-            plt.ylabel(var)
-            plt.title(f'Distribution of {var} by Customer Segment', fontsize=20, fontweight='bold', pad=20)
-            plt.show()
-            
-    elif plot_type == 'bar':
-        cluster_counts = clustered_data['Cluster label'].value_counts(normalize=True).reset_index()
-        print("Debug: Columns in cluster_counts:", cluster_counts.columns)  # Debug line
-        # cluster_counts.columns = [format_label(c) for c in cluster_counts.columns]  # remove this line
-        sns.barplot(x='Cluster label', y='Cluster label', data=cluster_counts, palette="viridis")  # use 'Cluster label' directly here
-            
+        cluster_summary.rename(index=rename_dict, inplace=True)
+        sns.heatmap(cluster_summary.T, annot=True, cmap='RdBu_r', fmt='.2f')
+        plt.title('Average Metrics by Segment')
+        plt.xlabel('Segment')
+        plt.ylabel('Feature')
+    
     else:
-        print("Invalid plot_type. Supported types are 'scatter', 'heatmap', 'box', and 'bar'.")
+        print("Invalid plot_type. Supported types are 'scatter' and 'heatmap'.")
 
 
 
-plot_clusters(clustered_data, plot_type='box', variables=['note_rate', 'highlight_rate'])
-
-
-plot_clusters(clustered_data, plot_type='scatter', variables=['note_rate', 'highlight_rate', 'insight_rate', 'invite_rate', 'shared_object_rate'])
-
+# Uncomment below lines to test the function with your 'clustered_data' DataFrame
+plot_clusters(clustered_data, plot_type='scatter')
 plot_clusters(clustered_data, plot_type='heatmap')
-
-
-
 plot_clusters(clustered_data, plot_type='bar')
+
+
 
 
 
