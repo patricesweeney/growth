@@ -5,20 +5,39 @@ Created on Tue Sep 12 19:34:20 2023
 """
 
 
+
 #%% Import
+
 import pandas as pd
 import numpy as np
 
-def import_data_local():
+def import_user_data_local():
     file_path = '/Users/patricksweeney/growth/03_Product/04_Engagement states/01_Static cluster/User data.xlsx'
     data = pd.read_excel(file_path)
     return data
 
-data = import_data_local()
+data = import_user_data_local()
+
+# Remove the 'shared_object_count' variable
+if 'shared_object_count' in data.columns:
+    data.drop('shared_object_count', axis=1, inplace=True)
+
+# Filter out rows where 'role' is equal to 'VIEWER'
+data = data[data['role'] != 'VIEWER']
+
+
+
+
+
+def import_workspace_data_local():
+    file_path = '/Users/patricksweeney/growth/03_Product/04_Engagement states/01_Static cluster/Workspace data.xlsx'
+    data = pd.read_excel(file_path)
+    return data
+
+workspace_data = import_workspace_data_local()
 
 # # Filter out rows where 'role' is equal to 'VIEWER'
 data = data[data['role'] != 'VIEWER']
-
 
 
 
@@ -195,7 +214,7 @@ def adoption(data):
     plt.figure(figsize=(10, 5))
     sns.barplot(x=percentages.values, y=percentages.index, palette="RdBu_r", order=percentages.index)
     plt.xlabel('Adoption Percentage')
-    plt.ylabel('Features')
+    plt.ylabel('Feature')
     plt.title('Adoption Percentage for Each Feature')
 
     # Use the custom percentage formatter for x-axis
@@ -207,12 +226,7 @@ def adoption(data):
 adoption(data)
 
 
-
-
-
-# Define a custom tick formatter to display real numbers
-def real_numbers(x, pos):
-    return str(int(10**x))
+# Modify the function to keep the y-axis in log10 normal scale (1, 10, 100, 1000) while scaling the values by 7
 
 def loglog(data):
     import matplotlib.pyplot as plt
@@ -220,7 +234,11 @@ def loglog(data):
     import numpy as np
     import pandas as pd
     from matplotlib.ticker import FuncFormatter
-    
+
+    # Custom tick formatter to display real numbers
+    def real_numbers(x, pos):
+        return str(int(10 ** x))
+
     # Drop constant and non-numeric columns
     filtered_data = data.select_dtypes(include=['number']).loc[:, data.nunique() > 1]
     
@@ -249,22 +267,28 @@ def loglog(data):
         non_zero_values = filtered_data[col][filtered_data[col] > 0]
         colors = duration_values[filtered_data[col] > 0]
         
-        # Add jitter to x and y values
-        jitter = 0  # You can adjust the amount of jitter
-        x_jitter = np.random.uniform(-jitter, jitter, len(non_zero_values))
-        y_jitter = np.random.uniform(-jitter, jitter, len(non_zero_values))
+        # Scale the y-variable by 7 (the size becomes weekly)
+        scaled_y = np.log10(1 + 7 * np.sort(non_zero_values)[::-1])
         
-        sns.scatterplot(x=np.log10(1 + np.arange(len(non_zero_values))) + x_jitter, 
-                        y=np.log10(1 + np.sort(non_zero_values)[::-1]) + y_jitter, 
+        sns.scatterplot(x=np.log10(1 + np.arange(len(non_zero_values))), 
+                        y=scaled_y, 
                         ax=ax, edgecolor='none', hue=colors, palette="RdBu_r", legend=False)
+        
+        # Add mean and median as vertical lines
+        mean_value = np.log10(1 + 7 * np.mean(non_zero_values))
+        median_value = np.log10(1 + 7 * np.median(non_zero_values))
+        
+        ax.axhline(mean_value, color='red', linestyle='-', linewidth=1)
+        ax.axhline(median_value, color='red', linestyle='--', linewidth=1)
+        
         ax.set_title(col)
-        ax.set_xlabel('User rank')
-        ax.set_ylabel('Usage rate')
+        ax.set_xlabel('User Rank')
+        ax.set_ylabel('Weekly Usage Rate')
         
         # Set x and y axis tick locators and formatters in log10 format
         ax.xaxis.set_major_locator(plt.FixedLocator(np.log10([1, 10, 100, 1000, 10000])))
         ax.xaxis.set_major_formatter(FuncFormatter(real_numbers))
-        ax.yaxis.set_major_locator(plt.FixedLocator(np.log10([1, 10, 100, 1000, 10000])))
+        ax.yaxis.set_major_locator(plt.FixedLocator(np.log10([1, 10, 100, 1000, 10000])))  # Normal scale
         ax.yaxis.set_major_formatter(FuncFormatter(real_numbers))
         
     # Remove extra subplots
@@ -274,11 +298,75 @@ def loglog(data):
     plt.tight_layout()
     plt.show()
 
+
 # Call the function
 loglog(data)
 
 
+def calculate_and_plot_gini(data):
+    import pandas as pd
+    import numpy as np
+    import matplotlib.pyplot as plt
+    
+    # Set font to Helvetica
+    plt.rcParams['font.family'] = 'Helvetica'
+    
+    def gini(array):
+        """Calculate the Gini coefficient of a numpy array."""
+        array = array.astype(float).flatten()
+        if np.amin(array) < 0:
+            array -= np.amin(array)
+        array += 0.0000001
+        array = np.sort(array)
+        index = np.arange(1, array.shape[0] + 1)
+        n = array.shape[0]
+        return ((np.sum((2 * index - n  - 1) * array)) / (n * np.sum(array)))
+    
+    # Drop constant and non-numeric columns
+    filtered_data = data.select_dtypes(include=['number']).loc[:, data.nunique() > 1]
+    
+    # Remove 'duration' if it exists
+    if 'duration' in filtered_data.columns:
+        filtered_data.drop(columns=['duration'], inplace=True, errors='ignore')
+    
+    # Dictionary to store Gini coefficients
+    gini_coefficients = {}
+    
+    # Calculate Gini coefficient for each numeric column
+    for column in filtered_data.columns:
+        gini_coefficients[column] = gini(filtered_data[column].values)
+    
+    # Sort the Gini coefficients in descending order
+    sorted_result = {k: v for k, v in sorted(gini_coefficients.items(), key=lambda item: item[1], reverse=True)}
+    
+    # Replace underscores with spaces and use title case
+    formatted_labels = [label.replace('_', ' ').title() for label in sorted_result.keys()]
+    
+    # Plot
+    plt.figure(figsize=(10, 5))
+    bars = plt.barh(formatted_labels, list(sorted_result.values()), color='darkred')
 
+    # Colormap
+    cm = plt.cm.get_cmap('Reds_r')
+    for i, bar in enumerate(bars):
+        bar.set_color(cm(i / len(sorted_result)))
+
+    plt.xlabel('Gini Coefficient')
+    plt.ylabel('Feature')
+    plt.title('Gini Coefficients For Each Variable')
+    plt.gca().invert_yaxis()
+
+    # Font and other formatting
+    plt.rcParams['font.family'] = 'Helvetica'
+    plt.xticks(fontsize=10)
+    plt.yticks(fontsize=10)
+    plt.title('Gini Coefficients For Each Feature', fontsize=12)
+
+    plt.show()
+
+
+
+calculate_and_plot_gini(data)
 
 #%% Preprocessing
 
@@ -306,6 +394,36 @@ data, data_original = log_transform(data, ['seats_latest', 'viewers_latest', 'du
 find_missing_values(data)
 data = impute_missing_values(data)
 summary_seats_log = eda_fivenum(data)
+
+
+
+
+# def boxcox_transform(data, leave):
+#     from scipy.stats import boxcox
+#     import pandas as pd
+#     import numpy as np
+
+#     # Make a copy of the original data
+#     data_original = data.copy()
+
+#     # Identify numeric columns
+#     numeric_cols = data.select_dtypes(include=[np.number]).columns.tolist()
+
+#     # Remove columns that shouldn't be transformed from the list
+#     transform_cols = [col for col in numeric_cols if col not in leave]
+
+#     # Apply Box-Cox transformation
+#     for col in transform_cols:
+#         # Adding 1 to handle zero values as boxcox requires strictly positive input
+#         data[col], _ = boxcox(data[col] + 1)
+    
+#     return data, data_original
+
+# # Example usage
+# data, data_original = boxcox_transform(data, ['seats_latest', 'viewers_latest', 'duration', 'mrr_latest'])
+# find_missing_values(data)
+# data = impute_missing_values(data)
+# summary_seats_boxcox = eda_fivenum(data)
 
 
 
@@ -356,7 +474,7 @@ def eda_pair_plot(data):
     numeric_data.rename(columns=renamed_columns, inplace=True)
     
     # Generate pairplot with different colors and linear regression line
-    g = sns.pairplot(numeric_data, kind='reg', plot_kws={'line_kws':{'color':'red'}, 'scatter_kws': {'alpha': 0.5}})
+    g = sns.pairplot(numeric_data, kind='reg', plot_kws={'line_kws':{'color':'red'}, 'scatter_kws': {'alpha': 0.02}})
     
     # Update plot labels to 'Title Case'
     for ax in plt.gcf().axes:
@@ -372,11 +490,136 @@ def eda_pair_plot(data):
 
 eda_pair_plot(data)
 
+
+
+def plot_elasticities(data):
+    from statsmodels.regression.linear_model import OLS
+    from statsmodels.tools.tools import add_constant
+    import pandas as pd
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    # Preprocess the data
+    plt.rcParams['font.family'] = 'Helvetica'
+    data.replace([np.inf, -np.inf], np.nan, inplace=True)
+    data.dropna(inplace=True)
+    if 'duration' in data.columns:
+        data.drop('duration', axis=1, inplace=True)
+    numeric_data = data.select_dtypes(include=[float, int])
+    renamed_columns = {col: col.replace('_', ' ').title() for col in numeric_data.columns}
+    numeric_data.rename(columns=renamed_columns, inplace=True)
+
+    # Prepare for plotting scatterplots
+    num_vars = len(numeric_data.columns)
+    num_plots = num_vars * (num_vars - 1)
+    num_rows = -(-num_plots // 4)  # Ceiling division
+    fig, axes = plt.subplots(num_rows, 4, figsize=(20, 5 * num_rows))
+    axes = axes.flatten()
+    plot_idx = 0
+    
+    # Initialize list to store elasticity info
+    elasticity_list = []
+
+    # Loop through each pair of features, including reverse pairs
+    for i, col1 in enumerate(numeric_data.columns):
+        for j, col2 in enumerate(numeric_data.columns):
+            if i == j:
+                continue
+            
+            # Prepare data and fit the model with robust standard errors
+            X = add_constant(numeric_data[col1])
+            y = numeric_data[col2]
+            model = OLS(y, X).fit(cov_type='HC3')
+
+            # Extract elasticity, p-value, and R-squared
+            elasticity = model.params[1]
+            p_value = model.pvalues[1]
+            r_squared = model.rsquared
+
+            # Plot scatter and regression line
+            sns.regplot(x=col1, y=col2, data=numeric_data, ax=axes[plot_idx], line_kws={"color": "red"})
+            axes[plot_idx].set_title(f"{col1} vs {col2}\nElasticity: {elasticity:.1f}, P-value: {p_value:.2f}, R^2: {r_squared:.2f}")
+
+            # Store elasticity info if R-squared > 0.3 and p-value < 0.01
+            if r_squared > 0.3 and p_value < 0.01:
+                elasticity_list.append((f"{col1} <- {col2}", elasticity))
+            
+            plot_idx += 1
+
+    # Remove unused subplots
+    for i in range(plot_idx, len(axes)):
+        fig.delaxes(axes[i])
+
+    plt.tight_layout()
+    plt.show()
+    
+
+# Call the function with robust standard errors
+plot_elasticities(data)
+
+
+def pair_elasticities_matrix(data, color_map_upper_bound=1):
+    from statsmodels.regression.linear_model import OLS
+    from statsmodels.tools.tools import add_constant
+    import pandas as pd
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+
+    plt.rcParams['font.family'] = 'Helvetica'
+    data.replace([np.inf, -np.inf], np.nan, inplace=True)
+    data.dropna(inplace=True)
+
+    if 'duration' in data.columns:
+        data.drop('duration', axis=1, inplace=True)
+
+    numeric_data = data.select_dtypes(include=[float, int])
+    renamed_columns = {col: col.replace('_', ' ').title() for col in numeric_data.columns}
+    numeric_data.rename(columns=renamed_columns, inplace=True)
+
+    elasticity_matrix = pd.DataFrame(index=numeric_data.columns, columns=numeric_data.columns)
+    rsquared_matrix = pd.DataFrame(index=numeric_data.columns, columns=numeric_data.columns)
+
+    for col1 in numeric_data.columns:
+        for col2 in numeric_data.columns:
+            if col1 == col2:
+                continue
+
+            X, y = numeric_data[col2], numeric_data[col1]
+            X = add_constant(X)
+            model = OLS(y, X).fit(cov_type='HC3')
+            
+            if model.pvalues[1] < 0.01 and model.rsquared >= 0.0:
+                elasticity_matrix.at[col1, col2] = model.params[1]
+                rsquared_matrix.at[col1, col2] = model.rsquared
+            else:
+                elasticity_matrix.at[col1, col2] = np.nan
+                rsquared_matrix.at[col1, col2] = np.nan
+
+    sorted_columns = np.abs(elasticity_matrix).mean().sort_values(ascending=False).index
+    sorted_elasticity_matrix = elasticity_matrix.loc[sorted_columns, sorted_columns]
+    sorted_rsquared_matrix = rsquared_matrix.loc[sorted_columns, sorted_columns]
+
+    plt.figure(figsize=(14, 10))
+    sns.heatmap(sorted_rsquared_matrix.astype(float), annot=sorted_elasticity_matrix.astype(float), fmt=".1f", cmap="Blues",
+                center=0.5, mask=sorted_elasticity_matrix.isna(), vmax=color_map_upper_bound)
+    plt.title('Feature Elasticity Matrix', fontsize=16)
+    plt.show()
+
+
+
+# Call the modified function with robust standard errors
+pair_elasticities_matrix(data)
+
+
+
+
 def eda_correlation_matrix(data):
     import pandas as pd
     import seaborn as sns
     import matplotlib.pyplot as plt
     import numpy as np
+    from sklearn.preprocessing import StandardScaler
     
     # Set font to Helvetica
     plt.rcParams['font.family'] = 'Helvetica'
@@ -434,6 +677,21 @@ def eda_correlation_matrix(data):
     
     # Show the bar plot
     plt.show()
+
+    # Standardize the filtered_data for variance check
+    scaler = StandardScaler()
+    standardized_data = scaler.fit_transform(filtered_data)
+    
+    # Create boxplot to check variance stability
+    plt.figure(figsize=(10, 8))
+    sns.boxplot(data=pd.DataFrame(standardized_data, columns=filtered_data.columns))
+    plt.xticks(rotation=90)
+    plt.title('Variance Stability Check')
+    
+    # Show the boxplot
+    plt.show()
+
+
 
 
 
@@ -588,11 +846,73 @@ data = correlation_selector(data, corr_threshold = 0.75)
 #%% Model selection
 
 
+def find_optimal_parameters_kmedoids(data, max_pca_components=10, max_clusters=10, do_scaling=True):
+    from sklearn_extra.cluster import KMedoids
+    from sklearn.metrics import silhouette_samples
+    import numpy as np
+    from sklearn.decomposition import PCA
+    from sklearn.preprocessing import StandardScaler
+
+    """
+    Finds the optimal number of Principal Components and clusters to maximize the medoid-based silhouette score.
+    
+    Parameters:
+    - data: DataFrame, the data to cluster.
+    - max_pca_components: int, the maximum number of Principal Components to consider.
+    - max_clusters: int, the maximum number of clusters to consider.
+    - do_scaling: bool, whether to scale the data or not.
+    
+    Returns:
+    - best_n_pca: int, the optimal number of Principal Components.
+    - best_n_clusters: int, the optimal number of clusters.
+    - best_silhouette: float, the best silhouette score achieved.
+    """
+    
+    # Filter only numeric and varying columns, excluding 'Duration'
+    numeric_data = data.select_dtypes(include=[np.number]).loc[:, data.nunique() > 1]
+    if 'Duration' in numeric_data.columns:
+        numeric_data.drop('Duration', axis=1, inplace=True)
+    
+    if numeric_data.empty:
+        print("No suitable columns for clustering.")
+        return None, None, None
+    
+    # Data scaling
+    if do_scaling:
+        scaler = StandardScaler()
+        numeric_data = scaler.fit_transform(numeric_data)
+    
+    best_n_pca = None
+    best_n_clusters = None
+    best_silhouette = -1  # Initialize with -1 as silhouette score ranges from -1 to 1
+    
+    for n_pca in range(1, max_pca_components + 1):
+        pca = PCA(n_components=n_pca)
+        reduced_data = pca.fit_transform(numeric_data)
+        
+        for n_clusters in range(2, max_clusters + 1):  # Starting from 2 as minimum number of clusters
+            kmedoids = KMedoids(n_clusters=n_clusters, method='pam')
+            kmedoids.fit(reduced_data)
+            labels = kmedoids.labels_
+            medoid_indices = kmedoids.medoid_indices_
+            
+            # Calculate medoid-based silhouette score
+            silhouette_values = silhouette_samples(reduced_data, labels)
+            medoid_silhouette_values = silhouette_values[medoid_indices]
+            silhouette_avg = np.mean(medoid_silhouette_values)
+            
+            # Update best parameters if current silhouette score is greater
+            if silhouette_avg > best_silhouette:
+                best_silhouette = silhouette_avg
+                best_n_pca = n_pca
+                best_n_clusters = n_clusters
+    
+    return best_n_pca, best_n_clusters, best_silhouette
+
+best_n_pca, best_n_clusters, best_silhouette = find_optimal_parameters_kmedoids(data, max_pca_components=10, max_clusters=10)
 
 
 #%% Train kmeans
-
-# Adding axis labels to the clustering plot for Principal Component 1 and Principal Component 2.
 
 def perform_clustering(data, pca, n_clusters, algorithm='KMeans', do_scaling=True, do_pca=True, plot=True, **kwargs):
     import pandas as pd
@@ -604,32 +924,39 @@ def perform_clustering(data, pca, n_clusters, algorithm='KMeans', do_scaling=Tru
     from sklearn.mixture import GaussianMixture
     from sklearn.metrics import silhouette_score
     import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d import Axes3D  # Importing this for 3D plotting
     from hdbscan import HDBSCAN
     from scipy.cluster.hierarchy import dendrogram, linkage
-
+    
     plt.rcParams['font.family'] = 'Helvetica'
-
+    
     # Filter only numeric and varying columns, excluding 'Duration'
     numeric_data = data.select_dtypes(include=[np.number]).loc[:, data.nunique() > 1]
     if 'Duration' in numeric_data.columns:
         numeric_data.drop('Duration', axis=1, inplace=True)
-
+    
     if numeric_data.empty:
         print("No suitable columns for clustering.")
         return None, None, None
-
+    
     # Data scaling
     if do_scaling:
         scaler = StandardScaler()
         numeric_data = scaler.fit_transform(numeric_data)
-
+    
     # Dimensionality reduction
     if do_pca:
-        pca = PCA(n_components=pca)
-        reduced_data = pca.fit_transform(numeric_data)
+        if isinstance(pca, int):
+            pca_obj = PCA(n_components=pca)
+        elif isinstance(pca, PCA):
+            pca_obj = pca
+        else:
+            raise TypeError("Invalid type for pca. Must be an integer or an instance of sklearn.decomposition.PCA.")
+        
+        reduced_data = pca_obj.fit_transform(numeric_data)
     else:
         reduced_data = numeric_data
-
+    
     # Algorithm selection
     algorithms = {
         'KMeans': KMeans,
@@ -643,236 +970,196 @@ def perform_clustering(data, pca, n_clusters, algorithm='KMeans', do_scaling=Tru
         'GaussianMixture': GaussianMixture,
         'Birch': Birch
     }
-
+    
     if algorithm not in algorithms:
         raise ValueError("Invalid clustering algorithm")
-
+    
     if algorithm == 'HDBSCAN':
         model = algorithms[algorithm](min_cluster_size=n_clusters, **kwargs)
     else:
         model = algorithms[algorithm](n_clusters=n_clusters, **kwargs)
-
+    
     model.fit(reduced_data)
-
+    
     labels = model.labels_ if hasattr(model, 'labels_') else model.predict(reduced_data)
-
+    
     # Metrics
     if len(set(labels)) > 1:
         silhouette_avg = round(silhouette_score(reduced_data, labels), 2)
     else:
         silhouette_avg = "N/A"
-
+    
     # Add cluster labels to data
     clustered_data = data.copy()
     clustered_data['Cluster label'] = labels
-
+    
+    # Print the number of points/rows in each segment
+    cluster_counts = clustered_data['Cluster label'].value_counts()
+    print("Number of points/rows in each segment:")
+    print(cluster_counts)
+    
     # Plotting
     if plot:
         plt.figure(figsize=(8, 8))
-        plt.scatter(reduced_data[:, 0], reduced_data[:, 1], c=labels, cmap='viridis', alpha=0.5)
+        plt.scatter(reduced_data[:, 0], reduced_data[:, 1], c=labels, cmap='viridis', alpha=0.8)
         plt.title(f'{algorithm} Clustering ({n_clusters} Segments)\nSilhouette Score: {silhouette_avg}')
-        plt.xlabel('Superfeature 1')  # Labeling the x-axis
-        plt.ylabel('Superfeature 2')  # Labeling the y-axis
+        plt.xlabel('Superfeature 1')
+        plt.ylabel('Superfeature 2')
+        
+        # Set custom axis limits
+        plt.xlim([-5, 15])  # Set x-axis limits
+        plt.ylim([-10, 20])  # Set y-axis limits
+
         plt.show()
-
-        # Plot dendrogram for hierarchical clustering methods
-        if algorithm in ['Agglomerative', 'HDBSCAN']:
-            linked = linkage(reduced_data, 'single')
-            plt.figure(figsize=(15, 7))
-            dendrogram(linked, truncate_mode='lastp', p=12, color_threshold=1, orientation='top', distance_sort='descending', show_leaf_counts=True, cmap='RdBu')
-            plt.title(f'{algorithm} Dendrogram')
-            plt.xlabel('Sample index or (cluster size)')
-            plt.ylabel('Distance')
-            plt.show()
-
+    
     # Cluster summary
     cluster_summary = clustered_data.groupby('Cluster label').median(numeric_only=True)
-
+    
     return clustered_data, silhouette_avg, cluster_summary
 
 # Example usage for testing (replace 'data' with your DataFrame)
-clustered_data, silhouette_avg, cluster_summary = perform_clustering(data=data, pca=2, n_clusters=3, algorithm='Agglomerative', do_pca=True)
+clustered_data, silhouette_avg, cluster_summary = perform_clustering(data=data, pca=10, n_clusters=3, algorithm='KMedoids', do_pca=True)
 
 
 #%% Interpretation
 
-# Modified function to plot clusters
-def plot_clusters(clustered_data, plot_type='scatter'):
-    import matplotlib.pyplot as plt
-    import seaborn as sns
+def join_and_rename_clusters(left, right, on, cluster_column='Cluster label'):
     import pandas as pd
     
+    # Perform left join
+    joined_data = pd.merge(left, right, how='left', on=on)
+    
+    # Rename cluster labels if the column exists in the data
+    if cluster_column in joined_data.columns:
+        label_map = {num: chr(65 + num) for num in range(26)}  # 65 is the ASCII value for 'A'
+        joined_data[cluster_column] = joined_data[cluster_column].map(label_map)
+    
+    return joined_data
+
+join_and_rename_clusters(clustered_data, workspace_data, 'workspace_id', cluster_column='Cluster label')
+
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+def plot_clusters_rotated(data, cluster_variable):
+    
+    # Configure plot style
+    sns.set(style="white")
     plt.rcParams['font.family'] = 'Helvetica'
     
-    # Identify numeric variables
-    numeric_vars = clustered_data.select_dtypes(include=['number']).columns.tolist()
+    # Create a figure and a 4x1 grid of subplots
+    fig, axes = plt.subplots(4, 1, figsize=(10, 16))
     
-    # Make sure only numeric variables are used for median calculation
-    if 'Cluster label' in numeric_vars:
-        numeric_vars.remove('Cluster label')
-    
-    # Rename clusters based on their median values
-    try:
-        cluster_summary = clustered_data.groupby('Cluster label').median(numeric_only=True)
-        sorted_clusters = cluster_summary.apply(lambda x: x.median(), axis=1).sort_values(ascending=False).index
-        rename_dict = {old: f'Segment {chr(65 + new)}' for new, old in enumerate(sorted_clusters)}
-        clustered_data['Cluster label'] = clustered_data['Cluster label'].map(rename_dict)
-    except Exception as e:
-        print(f"An error occurred while renaming clusters: {e}")
-    
-    if plot_type == 'scatter':
-        sns.pairplot(data=clustered_data, hue='Cluster label', vars=numeric_vars, diag_kind='kde', palette="viridis", plot_kws={'alpha': 0.5})
-        plt.suptitle('Scatter Plots by Segment', y=1.02)
-    
-    elif plot_type == 'heatmap':
-        cluster_summary.rename(index=rename_dict, inplace=True)
-        sns.heatmap(cluster_summary.T, annot=True, cmap='RdBu_r', fmt='.2f')
-        plt.title('Average Metrics by Segment')
-        plt.xlabel('Segment')
-        plt.ylabel('Feature')
-    
-    else:
-        print("Invalid plot_type. Supported types are 'scatter' and 'heatmap'.")
-
-
-
-# Uncomment below lines to test the function with your 'clustered_data' DataFrame
-plot_clusters(clustered_data, plot_type='scatter')
-plot_clusters(clustered_data, plot_type='heatmap')
-plot_clusters(clustered_data, plot_type='bar')
-
-
-
-
-
-
-
-
-
-def bin_rate_inverse(rate_per_30_days):
-    if rate_per_30_days == 0:
-        return "Never"
-    
-    inverse_rate_30_days = 30 / rate_per_30_days
-    inverse_bins = {
-        'Daily': (0, 1),
-        'Weekly': (1, 7),
-        'Fortnightly': (7, 14),
-        'Monthly': (14, 30),
-        'Quarterly': (30, 90),
-        'Annually': (90, 365),
-        'Rarely': (365, float('inf'))
-    }
-
-    for time_frame, (lower, upper) in inverse_bins.items():
-        if lower <= inverse_rate_30_days < upper:
-            return time_frame
-    return "Out of Range"
-
-
-
-def cluster_summary(data, data_original, join_on):
-    import pandas as pd
-
-    joined_data = pd.merge(data[['cluster_label', join_on]], data_original, on=join_on, how='inner')
-    
-    numeric_cols = joined_data.select_dtypes(include=['number']).columns
-    numeric_cols = [col for col in numeric_cols if col != 'cluster_label']
-
-    summary = joined_data.groupby('cluster_label')[numeric_cols].median().reset_index()
-
-    rate_cols = [col for col in numeric_cols if 'rate' in col]
-    summary[rate_cols] = (summary[rate_cols] * 30).round(1)
-    
-    cluster_counts = joined_data['cluster_label'].value_counts().reset_index()
-    cluster_counts.columns = ['cluster_label', 'n']
-    total_count = len(joined_data)
-    cluster_counts['% of total'] = (cluster_counts['n'] / total_count * 100).round(1)
-
-    summary = pd.merge(summary, cluster_counts, on='cluster_label', how='inner')
-
-    total_mrr = joined_data['mrr_latest'].sum()
-    mrr_by_cluster = joined_data.groupby('cluster_label')['mrr_latest'].sum().reset_index()
-    mrr_by_cluster['% mrr_latest'] = (mrr_by_cluster['mrr_latest'] / total_mrr * 100).round(1)
-
-    summary = pd.merge(summary, mrr_by_cluster[['cluster_label', '% mrr_latest']], on='cluster_label', how='inner')
-
-    summary_row = pd.DataFrame(summary.mean(numeric_only=True)).T
-    summary_row['cluster_label'] = 'Summary'
-    summary = pd.concat([summary, summary_row], ignore_index=True)
-    
-    print("Cluster Summary:")
-    print(summary)
-    
-    for rate_col in rate_cols:
-        binned_col = f"{rate_col}_bin"
-        summary[binned_col] = summary[rate_col].apply(bin_rate_inverse)
-    
-    return summary
-
-
-# Sample usage
-summary = cluster_summary(clustered_data, data_original, 'workspace_id')
-
-
-
-def plot_cluster_summary(summary):
-    import matplotlib.pyplot as plt
-    import seaborn as sns
-    import pandas as pd
-
-    sns.set(style="white")
-    color_palette = sns.color_palette("husl", 10)
-
-    numeric_cols = summary.select_dtypes(include=['number']).columns.tolist()
-    for col in ['cluster_label', 'n', '% of total']:
-        if col in numeric_cols:
-            numeric_cols.remove(col)
-    
-    summary_for_plot = summary[summary['cluster_label'] != 'Summary']
-    scaled_summary = summary_for_plot[numeric_cols].apply(lambda x: (x - x.min()) / (x.max() - x.min()))
-    scaled_summary['cluster_label'] = summary_for_plot['cluster_label']
-    
-    melted = pd.melt(scaled_summary, id_vars=['cluster_label'], value_vars=numeric_cols)
-    unique_clusters = summary_for_plot['cluster_label'].unique()
-    
-    fig, axes = plt.subplots(1, len(unique_clusters), figsize=(15, 8), sharey=True)
-    
-    for ax, cluster in zip(axes, unique_clusters):
-        cluster_data = melted[melted['cluster_label'] == cluster]
-        sns.barplot(x='value', y='variable', data=cluster_data, ax=ax, palette=color_palette)
-        
-        pct_total = int(summary_for_plot.loc[summary_for_plot['cluster_label'] == cluster, '% of total'].values[0])
-        ax.set_title(f"Segment {cluster} ({pct_total}%)", fontsize=14)
-        
+    # Remove grid lines
+    for ax in axes:
         ax.grid(False)
+    
+    # Plot 'mrr_latest' boxplots
+    sns.boxplot(x=np.log10(data['mrr_latest']), y=cluster_variable, data=data, ax=axes[0], orient='h', palette='viridis')
+    axes[0].set_title('Distribution of Workspace MRR by User Segment')
+    axes[0].set_ylabel('Segment')
+    axes[0].set_xlabel('MRR Latest')
+    axes[0].set_xticklabels([f'${10 ** x:.0f}' for x in axes[0].get_xticks()])
+    
+    # Plot 'seats_latest' boxplots
+    sns.boxplot(x=np.log10(data['seats_latest']), y=cluster_variable, data=data, ax=axes[1], orient='h', palette='viridis')
+    axes[1].set_title('Distribution of Workspace Seats by User Segment')
+    axes[1].set_ylabel('Segment')
+    axes[1].set_xlabel('Seats Latest')
+    axes[1].set_xticklabels([f'{10 ** x:.0f}' for x in axes[1].get_xticks()])
+    
+    # Calculate 'Seat Price' as mrr_latest / seats_latest
+    data['seat_price'] = data['mrr_latest'] / data['seats_latest']
+    
+    # Plot 'Seat Price' boxplots
+    sns.boxplot(x=np.log10(data['seat_price']), y=cluster_variable, data=data, ax=axes[2], orient='h', palette='viridis')
+    axes[2].set_title('Distribution of User Seat Price by User Segment')
+    axes[2].set_ylabel('Segment')
+    axes[2].set_xlabel('Seat Price')
+    axes[2].set_xticklabels([f'${10 ** x:.0f}' for x in axes[2].get_xticks()])
+    
+    # Plot 'Product Latest' as normalized bar plot
+    sns.countplot(y=cluster_variable, hue='products_latest', data=data, ax=axes[3], palette='plasma')
+    axes[3].set_title('Distribution of Products Latest by Segment')
+    axes[3].set_ylabel('Segment')
+    axes[3].set_xlabel('Count')
         
-        for _, spine in ax.spines.items():
-            spine.set_visible(True)
-            spine.set_edgecolor('black')
-            spine.set_linewidth(1)
+    # Normalize the bars within each segment
+    for p in axes[3].patches:
+        total = len(data[data['Cluster label'] == int(p.get_y() + p.get_height() / 2)])
+        percentage = f'{100 * p.get_width() / total:.1f}%'
+        x = p.get_x() + p.get_width() + 0.02
+        y = p.get_y() + p.get_height() / 2
+        axes[3].annotate(percentage, (x, y))
+    
+    plt.tight_layout()
+    plt.show()
+
+# Call the function with example data
+plot_clusters_rotated(joined, 'Cluster label')
+
+
+#%% Adoption
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+import numpy as np
+import pandas as pd
+from matplotlib.ticker import FuncFormatter
+
+
+def adoption_by_segment(data, segment_variable):
+    # Function to format label
+    def format_label(label):
+        return ' '.join([word.capitalize() for word in label.split('_')])
+    
+    # Function to format percentage on x-axis
+    def percentage_formatter(x, pos):
+        return f"{x:.0f}%"
+
+    # Filter out rows where 'role' is equal to 'VIEWER'
+    filtered_data = data[data['role'] != 'VIEWER']
+    
+    # Drop constant and non-numeric columns
+    filtered_data = filtered_data.select_dtypes(include=['number']).loc[:, filtered_data.nunique() > 1]
+
+    # Remove 'duration' if it exists from filtered_data
+    if 'duration' in filtered_data:
+        filtered_data = filtered_data.drop(columns=['duration'], errors='ignore')
+    
+    # Get unique segments
+    unique_segments = data[segment_variable].unique()
+
+    # Create subplots for each segment
+    fig, axes = plt.subplots(len(unique_segments), 1, figsize=(10, 5 * len(unique_segments)))
+
+    # Set font to Helvetica
+    plt.rcParams['font.family'] = 'Helvetica'
+    
+    for i, segment in enumerate(unique_segments):
+        segment_data = filtered_data[data[segment_variable] == segment]
+        percentages = (segment_data > 0).mean() * 100
+
+        # Rename columns using the custom label formatting function
+        percentages.index = percentages.index.map(format_label)
+
+        # Sort the percentages in descending order
+        percentages = percentages.sort_values(ascending=False)
         
-        for index, p in enumerate(ax.patches):
-            width = p.get_width()
-            y, height = p.get_y(), p.get_height()
-            actual_value = summary_for_plot.loc[summary_for_plot['cluster_label'] == cluster, numeric_cols[index]].values[0]
-            
-            binned_col_name = f"{numeric_cols[index]}_bin"
-            if binned_col_name in summary_for_plot.columns:
-                binned_value = summary_for_plot.loc[summary_for_plot['cluster_label'] == cluster, binned_col_name].values[0]
-                ax.text(width + 0.01, y + height / 2, f"{actual_value:.1f} ({binned_value})", va='center', fontsize=10)
-            else:
-                ax.text(width + 0.01, y + height / 2, f"{actual_value:.1f}", va='center', fontsize=10)
-        
-        ax.set_xlim(0, 1.1)
-        ax.set_xticklabels([])
-        ax.set_xlabel('')
-        ax.set_ylabel('')
+        # Create a bar plot of adoption percentages
+        sns.barplot(x=percentages.values, y=percentages.index, palette="RdBu_r", order=percentages.index, ax=axes[i])
+        axes[i].set_xlabel('Adoption Percentage')
+        axes[i].set_ylabel('Feature')
+        axes[i].set_title(f'Adoption Percentage for Each Feature in Segment {segment}')
+        axes[i].xaxis.set_major_formatter(FuncFormatter(percentage_formatter))
         
     plt.tight_layout()
     plt.show()
 
-plot_cluster_summary(summary)
+
+# Call the function with example data
+adoption_by_segment(joined, 'Cluster label')
 
 
 #%% Save
