@@ -59,6 +59,18 @@ def calculate_sparsity(data):
 calculate_sparsity(data)
 
 
+def join(left, right, on):
+    import pandas as pd
+    
+    # Perform left join
+    joined_data = pd.merge(left, right, how='left', on=on)
+
+    
+    return joined_data
+
+data = join(data, workspace_data, 'workspace_id')
+
+
 #%%Clean
 def find_missing_values(data):
     missing_values = data.isnull().sum()
@@ -84,26 +96,29 @@ def impute_missing_values(data):
     # Replace infinities with NaNs
     data_copy.replace([np.inf, -np.inf], np.nan, inplace=True)
     
-    # Create an imputer instance with median strategy
-    imputer = SimpleImputer(strategy='median')
-    
     # Extract numerical columns
     data_num = data_copy.select_dtypes(include=[np.number])
     
-    # Fit the imputer to the numerical data with NaNs
-    imputer.fit(data_num)
+    # Create an imputer instance with median strategy for numerical columns
+    imputer = SimpleImputer(strategy='median')
     
-    # Transform the numerical data with the imputer
+    # Fit and transform the numerical data
+    imputer.fit(data_num)
     data_num_imputed = imputer.transform(data_num)
     
     # Convert the imputed data back to a DataFrame
     data_num_imputed_df = pd.DataFrame(data_num_imputed, columns=data_num.columns, index=data_num.index)
     
-    # Replace only the NaNs in the original DataFrame with the imputed values
+    # Replace only the NaNs in the numerical columns with the imputed values
     for col in data_num.columns:
         data_copy.loc[data_num[col].isna(), col] = data_num_imputed_df.loc[data_num[col].isna(), col]
+        
+    # Handle categorical or string columns
+    data_cat = data_copy.select_dtypes(include=['object'])
+    data_copy[data_cat.columns] = data_cat.fillna('Unknown')
     
     return data_copy
+
 
 # Example usage (replace 'data' with your DataFrame)
 # imputed_data = impute_missing_values(data)
@@ -164,143 +179,470 @@ data = impute_missing_values(data)
 summary_lambdas = eda_fivenum(data)
 
 
-#%% Distribution (log log plots)
+#%% Ising shit
+def decimate(data):
+    import pandas as pd
+    
+    # Identify columns that end with '_rate'
+    count_cols = [col for col in data.columns if col.endswith('_rate')]
+    
+    # Create new DataFrame to store the binary columns
+    new_data = data.copy()
+    
+    # Store the average of each new binary column
+    avg_values = {}
+    
+    for col in count_cols:
+        # Calculate the mean of the column
+        median_value = data[col].median()
+        
+        # Create new binary column with values set to 1 if above the mean, else 0
+        new_col_name = col.replace('_rate', '_binary')
+        new_data[new_col_name] = (data[col] > median_value).astype(int)
+        
+        # Store the average of the new binary column
+        avg_values[new_col_name] = new_data[new_col_name].mean() * 100
+        
+        # Drop the old '_rate' column
+        new_data.drop(columns=[col], inplace=True)
+    
+    # Count the number of new binary columns
+    num_binary_cols = len(avg_values)
+    
+    # Calculate the number of potential microstates
+    num_microstates = 2 ** num_binary_cols
+    
+    # Print the average of each new binary column in percentage with no decimal places
+    for col, avg in avg_values.items():
+        print(f"The average of {col} is {int(avg)}%")
+    
+    print() 
+    # Print the number of binary columns and potential microstates
+    print(f"You have {num_binary_cols} variables with 2 states each. Therefore, the number of potential microstates are 2^{num_binary_cols} = {num_microstates}.")
+    
+    return new_data
+
+    
+decimated_data = decimate(data)
 
 
-# Define a custom tick formatter to display percentages
-def percentage_formatter(x, pos):
-    return f'{x:.0f}%'
 
-# Custom label formatting function
-def format_label(label):
-    # Replace underscores with spaces, apply title case, and remove ' Rate' from the end
-    return label.replace('_', ' ').title().replace(' Rate', '')
 
-def adoption(data):
+find_missing_values(decimated_data)
+
+data = impute_missing_values(decimated_data)
+
+
+
+def join(left, right, on):
+    import pandas as pd
+    
+    # Perform left join
+    joined_data = pd.merge(left, right, how='left', on=on)
+
+    
+    return joined_data
+
+joined_decimated_data = join(decimated_data, workspace_data, 'workspace_id')
+
+
+
+from scipy.stats import entropy
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+def total_correlation(group, binary_cols):
+    import numpy as np
+    from scipy.stats import entropy
+    
+    # Filter and transpose data
+    group = group[binary_cols]
+    transposed_group = group.transpose()
+    
+    # Joint distribution
+    joint_distribution = transposed_group.apply(lambda x: tuple(x), axis=1).value_counts(normalize=True)
+    joint_probs = joint_distribution.values
+    joint_entropy = -np.sum(joint_probs * np.log2(joint_probs))
+    
+    # Marginal distributions and entropy
+    marginal_entropies = []
+    for col in binary_cols:
+        marginal_distribution = group[col].value_counts(normalize=True)
+        marginal_entropies.append(entropy(marginal_distribution, base=2))
+    marginal_entropy_sum = np.sum(marginal_entropies)
+    
+    # Total correlation
+    tc = marginal_entropy_sum - joint_entropy
+    
+    return tc, joint_entropy, marginal_entropy_sum
+
+
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+# Set font to Helvetica
+plt.rcParams['font.family'] = 'Helvetica'
+
+def ising_summary_with_total_correlation_and_plots(data):
+    import pandas as pd
+    import numpy as np
+    
+    binary_cols = [col for col in data.columns if data[col].dtype == 'bool']
+    grouped = data.groupby(['workspace_id', 'stripe_customer_name_x', 'mrr_latest'])
+    
+    summary_list = []
+
+    for name, group in grouped:
+        workspace_id, stripe_customer_name, mrr_latest = name
+        n_rows = len(group)
+        magnetization = group[binary_cols].mean().mean()
+        tc, joint_entropy_sum, marginal_entropy_sum = total_correlation(group, binary_cols)
+        
+        summary_list.append({
+            'workspace_id': workspace_id,
+            'stripe_customer_name': stripe_customer_name,
+            'mrr_latest': mrr_latest,
+            'magnetization': magnetization,
+            'total_correlation': tc,
+            'joint_entropy_sum': joint_entropy_sum,
+            'marginal_entropy_sum': marginal_entropy_sum,
+            'n_rows': n_rows
+        })
+        
+    summary_df = pd.DataFrame(summary_list)
+    
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    
+    # All plots involving mrr_latest now log-scaled
+    for ax in axes:
+        ax.set_xscale('log')
+    
+    sns.scatterplot(x='mrr_latest', y='total_correlation', data=summary_df, ax=axes[0], palette='RdBu_r')
+    axes[0].set_xlabel('mrr_latest')
+    axes[0].set_ylabel('Total Correlation')
+    
+    sns.scatterplot(x='mrr_latest', y='magnetization', data=summary_df, ax=axes[1], palette='RdBu_r')
+    axes[1].set_xlabel('mrr_latest')
+    axes[1].set_ylabel('Magnetization')
+    
+    sns.scatterplot(x='magnetization', y='total_correlation', data=summary_df, ax=axes[2], palette='RdBu_r')
+    axes[2].set_xlabel('Magnetization')
+    axes[2].set_ylabel('Total Correlation')
+    
+    plt.show()
+    
+    return summary_df
+
+# Assuming joined_decimated_data is already defined
+ising = ising_summary_with_total_correlation_and_plots(joined_decimated_data)
+
+
+
+
+
+
+
+
+def sequence_plot(data):
     import matplotlib.pyplot as plt
     import seaborn as sns
-    import numpy as np
     import pandas as pd
-    from matplotlib.ticker import FuncFormatter
+    import numpy as np
     
-    filtered_data = data
-
-    # Filter out rows where 'role' is equal to 'VIEWER'
-    filtered_data = data[data['role'] != 'VIEWER']
+    # Filter for specific workspace_id and sample 100 random user_ids
+    filtered_data = data[data['workspace_id'] == 'ba9d0519-6ac7-4f8a-99b1-1576e927df26'].sample(500, random_state=42)
     
-
-
-    # Drop constant and non-numeric columns
-    filtered_data = filtered_data.select_dtypes(include=['number']).loc[:, filtered_data.nunique() > 1]
-
-    # Remove 'duration' if it exists from filtered_data
-    if 'duration' in filtered_data:
-        filtered_data = filtered_data.drop(columns=['duration'], errors='ignore')
-
-    # For each column, calculate the percentage of rows where value > 0
-    # Store and plot in a bar plot
-    percentages = (filtered_data > 0).mean() * 100
-
-    # Set font to Helvetica
-    plt.rcParams['font.family'] = 'Helvetica'
-
-    # Rename columns using the custom label formatting function
-    percentages.index = percentages.index.map(format_label)
-
-    # Sort the percentages in descending order
-    percentages = percentages.sort_values(ascending=False)
-
-    # Create a bar plot of adoption percentages
-    plt.figure(figsize=(10, 5))
-    sns.barplot(x=percentages.values, y=percentages.index, palette="RdBu_r", order=percentages.index)
-    plt.xlabel('Adoption Percentage')
-    plt.ylabel('Feature')
-    plt.title('Adoption Percentage for Each Feature')
-
-    # Use the custom percentage formatter for x-axis
-    plt.gca().xaxis.set_major_formatter(FuncFormatter(percentage_formatter))
-
+    # Filter columns that end with '_binary'
+    binary_data = filtered_data.filter(like='_binary')
+    
+    # Create two-letter feature names
+    two_letter_names = {col: col[:2].title() for col in binary_data.columns}
+    renamed_data = binary_data.rename(columns=two_letter_names)
+    
+    # Create heatmap
+    plt.figure(figsize=(15, 10))
+    sns.heatmap(renamed_data, cmap=["blue", "red"], cbar=False)
+    
+    plt.xlabel('Features')
+    plt.ylabel('User IDs')
+    plt.title('Feature Sequence Heatmap')
     plt.show()
 
-# Call the function
-adoption(data)
+
+sequence_plot(decimated_data)
+
+#%% Distribution (log log plots)
+
+def adoption(data, class_var=None):
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    from matplotlib.ticker import FuncFormatter
+    
+    def percentage_formatter(x, pos):
+        return f'{x:.0f}%'
+        
+    def format_label(label):
+        return label.replace('_', ' ').title().replace(' Rate', '')
+    
+    class_data = None
+    if class_var and class_var in data.columns:
+        class_data = data[class_var].copy()
+    
+    filtered_data = data[data['role'] != 'VIEWER']
+    rate_cols = [col for col in filtered_data.columns if col.endswith('_rate')]
+    filtered_data = filtered_data[rate_cols]
+    filtered_data = filtered_data.select_dtypes(include=['number']).loc[:, filtered_data.nunique() > 1]
+    
+    if class_data is not None:
+        filtered_data[class_var] = class_data
+    
+    # Exclude 'Unknown' from class_var
+    if class_var:
+        filtered_data = filtered_data[filtered_data[class_var] != 'Unknown']
+    
+    plt.rcParams['font.family'] = 'Helvetica'
+    
+    if class_var and class_var in filtered_data.columns:
+        classes = filtered_data[class_var].unique()
+        n_classes = len(classes)
+        n_cols = 2
+        n_rows = int(np.ceil(n_classes / n_cols))
+        
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(20, n_rows * 10), squeeze=False)
+        axes = axes.flatten()
+        
+        for i, cls in enumerate(classes):
+            ax = axes[i]
+            group_data = filtered_data[filtered_data[class_var] == cls]
+            numeric_group_data = group_data.select_dtypes(include=['number'])
+            
+            percentages = (numeric_group_data > 0).mean() * 100
+            percentages.index = percentages.index.map(format_label)
+            percentages = percentages.sort_values(ascending=False).drop(class_var, errors='ignore')
+            
+            sns.barplot(x=percentages.values, y=percentages.index, palette="RdBu_r", ax=ax)
+            ax.set_xlabel('Adoption Percentage')
+            ax.set_ylabel('Feature')
+            ax.set_title(f'Feature Adoption Percentage for {cls}')
+            ax.xaxis.set_major_formatter(FuncFormatter(percentage_formatter))
+        
+        for i in range(n_classes, len(axes)):
+            fig.delaxes(axes[i])
+        
+        plt.tight_layout()
+        plt.show()
+    else:
+        percentages = (filtered_data > 0).mean() * 100
+        percentages.index = percentages.index.map(format_label)
+        percentages = percentages.sort_values(ascending=False)
+        
+        plt.figure(figsize=(10, 5))
+        sns.barplot(x=percentages.values, y=percentages.index, palette="RdBu_r")
+        plt.xlabel('Adoption Percentage')
+        plt.ylabel('Feature')
+        plt.title('Feature Adoption Percentage')
+        plt.gca().xaxis.set_major_formatter(FuncFormatter(percentage_formatter))
+        plt.show()
 
 
-# Modify the function to keep the y-axis in log10 normal scale (1, 10, 100, 1000) while scaling the values by 7
+# Running the function again with the sample data
+adoption(data, class_var='products_segment')
 
-def loglog(data):
+
+def feature_based_adoption(data, class_var=None):
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    import numpy as np
+    from matplotlib.ticker import FuncFormatter
+    
+    def percentage_formatter(x, pos):
+        return f'{x:.0f}%'
+        
+    def format_label(label):
+        return label.replace('_', ' ').title().replace(' Rate', '')
+    
+    class_data = None
+    if class_var and class_var in data.columns:
+        class_data = data[class_var].copy()
+    
+    filtered_data = data[data['role'] != 'VIEWER']
+    rate_cols = [col for col in filtered_data.columns if col.endswith('_rate')]
+    filtered_data = filtered_data[rate_cols]
+    filtered_data = filtered_data.select_dtypes(include=['number']).loc[:, filtered_data.nunique() > 1]
+    
+    if class_data is not None:
+        filtered_data[class_var] = class_data
+    
+    # Exclude 'Unknown' from class_var
+    if class_var:
+        filtered_data = filtered_data[filtered_data[class_var] != 'Unknown']
+    
+    # Remove classes with n < 50
+    class_counts = filtered_data[class_var].value_counts()
+    valid_classes = class_counts[class_counts >= 50].index.tolist()
+    filtered_data = filtered_data[filtered_data[class_var].isin(valid_classes)]
+    
+    plt.rcParams['font.family'] = 'Helvetica'
+    
+    if class_var and class_var in filtered_data.columns:
+        features = rate_cols
+        n_features = len(features)
+        n_cols = 2
+        n_rows = int(np.ceil(n_features / n_cols))
+        
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(20, n_rows * 10), squeeze=False)
+        axes = axes.flatten()
+        
+        for i, feature in enumerate(features):
+            ax = axes[i]
+            # Calculate the proportion of adoption where value > 0 for each class category
+            adoption_proportion = filtered_data.groupby(class_var)[feature].apply(lambda x: (x > 0).mean() * 100).reset_index()
+            adoption_proportion = adoption_proportion.sort_values(by=feature, ascending=False)
+            sns.barplot(data=adoption_proportion, x=feature, y=class_var, palette="RdBu_r", ax=ax)
+            ax.set_xlabel('Adoption Percentage')
+            ax.set_ylabel('Class Category')
+            ax.set_title(f'Feature Adoption Percentage for {format_label(feature)}')
+            ax.xaxis.set_major_formatter(FuncFormatter(percentage_formatter))
+            
+            # Remove the lines across bars
+            sns.despine(left=True, bottom=True)
+        
+        for i in range(n_features, len(axes)):
+            fig.delaxes(axes[i])
+        
+        plt.tight_layout()
+        plt.show()
+    else:
+        print("No class_var specified or not found in data columns.")
+
+
+
+
+feature_based_adoption(data, class_var='company_vertical')
+
+
+
+def loglog_plot(data, class_var=None):
     import matplotlib.pyplot as plt
     import seaborn as sns
     import numpy as np
     import pandas as pd
     from matplotlib.ticker import FuncFormatter
 
-    # Custom tick formatter to display real numbers
     def real_numbers(x, pos):
         return str(int(10 ** x))
 
     # Drop constant and non-numeric columns
     filtered_data = data.select_dtypes(include=['number']).loc[:, data.nunique() > 1]
     
-    # Extract the 'duration' column for coloring
-    duration_values = data['duration']
-    
-    # Remove 'duration' if it exists from filtered_data
-    if 'duration' in filtered_data:
-        filtered_data = filtered_data.drop(columns=['duration'], errors='ignore')
-    
-    # Rename columns to 'Title Case' without underscores
-    renamed_columns = {col: col.replace('_', ' ').title() for col in filtered_data.columns}
-    filtered_data.rename(columns=renamed_columns, inplace=True)
-    
-    # Number of rows and columns for subplots
-    n = len(filtered_data.columns)
-    n_cols = 4  # You can adjust the number of columns here
+    if class_var and class_var in data.columns:
+        filtered_data[class_var] = data[class_var]
+
+    n_cols = 4  # Adjust as needed
+    n = len(filtered_data.columns) - int(class_var in filtered_data.columns)
     n_rows = int(np.ceil(n / n_cols))
-    
+
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols * 5, n_rows * 5), squeeze=False)
     axes = axes.flatten()
     
-    # Loop through each variable for log-log plot
-    for i, col in enumerate(filtered_data.columns):
+    for i, col in enumerate(filtered_data.drop(columns=[class_var], errors='ignore').columns):
         ax = axes[i]
-        non_zero_values = filtered_data[col][filtered_data[col] > 0]
-        colors = duration_values[filtered_data[col] > 0]
+        non_zero_data = filtered_data.loc[filtered_data[col] > 0, [col, class_var]]
+
+        # Scale the y-variable by 7
+        scaled_y = np.log10(1 + 7 * np.sort(non_zero_data[col])[::-1])
         
-        # Scale the y-variable by 7 (the size becomes weekly)
-        scaled_y = np.log10(1 + 7 * np.sort(non_zero_values)[::-1])
-        
-        sns.scatterplot(x=np.log10(1 + np.arange(len(non_zero_values))), 
+        sns.scatterplot(x=np.log10(1 + np.arange(len(non_zero_data))), 
                         y=scaled_y, 
-                        ax=ax, edgecolor='none', hue=colors, palette="RdBu_r", legend=False)
-        
-        # Add mean and median as vertical lines
-        mean_value = np.log10(1 + 7 * np.mean(non_zero_values))
-        median_value = np.log10(1 + 7 * np.median(non_zero_values))
-        
+                        hue=non_zero_data[class_var] if class_var else None,
+                        ax=ax, edgecolor='none', palette="RdBu_r", legend='full')
+
+        mean_value = np.log10(1 + 7 * non_zero_data[col].mean())
+        median_value = np.log10(1 + 7 * np.median(non_zero_data[col]))
+
         ax.axhline(mean_value, color='red', linestyle='-', linewidth=1)
         ax.axhline(median_value, color='red', linestyle='--', linewidth=1)
-        
+
         ax.set_title(col)
         ax.set_xlabel('User Rank')
         ax.set_ylabel('Weekly Usage Rate')
-        
-        # Set x and y axis tick locators and formatters in log10 format
-        ax.xaxis.set_major_locator(plt.FixedLocator(np.log10([1, 10, 100, 1000, 10000])))
+
+        ax.xaxis.set_major_locator(plt.FixedLocator(np.log10([1, 10, 100, 1000, 10000, 100000])))
         ax.xaxis.set_major_formatter(FuncFormatter(real_numbers))
-        ax.yaxis.set_major_locator(plt.FixedLocator(np.log10([1, 10, 100, 1000, 10000])))  # Normal scale
+        ax.yaxis.set_major_locator(plt.FixedLocator(np.log10([1, 10, 100, 1000, 10000, 100000])))
         ax.yaxis.set_major_formatter(FuncFormatter(real_numbers))
-        
-    # Remove extra subplots
-    for i in range(len(filtered_data.columns), len(axes)):
+
+    for i in range(n, len(axes)):
         fig.delaxes(axes[i])
-    
+
     plt.tight_layout()
     plt.show()
 
-
 # Call the function
-loglog(data)
+loglog_plot(data, class_var='products_latest')
+
+
+def loglog_plot_with_kde(data, class_var=None):
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    import numpy as np
+    from matplotlib.ticker import FuncFormatter
+
+    def real_numbers(x, pos):
+        return str(int(10 ** x))
+
+    filtered_data = data.select_dtypes(include=['number']).loc[:, data.nunique() > 4]
+    filtered_data = filtered_data.drop(columns=['mrr_latest', 'seats_latest', 'duration'], errors='ignore')
+
+    if class_var and class_var in data.columns:
+        filtered_data[class_var] = data[class_var]
+        filtered_data = filtered_data[filtered_data[class_var] != 'Unknown']
+
+    n_cols = 4
+    n = len(filtered_data.columns) - int(class_var in filtered_data.columns)
+    n_rows = int(np.ceil(n / n_cols))
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols * 5, n_rows * 5), squeeze=False)
+    axes = axes.flatten()
+
+    handles, labels = None, None  # Initialize variables to hold legend info
+
+    for i, col in enumerate(filtered_data.drop(columns=[class_var], errors='ignore').columns):
+        ax = axes[i]
+        non_zero_data = filtered_data.loc[filtered_data[col] > 0, [col, class_var]]
+
+        if non_zero_data[col].var() == 0:
+            ax.set_title(f"{col} (Zero variance)")
+            continue
+
+        scaled_y = np.log10(1 + 7 * non_zero_data[col])
+        sns.kdeplot(x=scaled_y, hue=non_zero_data[class_var] if class_var else None, ax=ax, palette="RdBu_r", common_norm=False, legend=False)
+
+        ax.set_title(col.replace("_", " ").title())
+        ax.set_xlabel('Weekly Usage Rate')
+        ax.set_ylabel('Density')
+        ax.xaxis.set_major_locator(plt.FixedLocator(np.log10([1, 10, 100, 1000, 10000, 100000])))
+        ax.xaxis.set_major_formatter(FuncFormatter(real_numbers))
+
+        # Capture legend handles and labels from the first subplot that has them
+        if class_var and handles is None:
+            handles, labels = ax.get_legend_handles_labels()
+
+    # Remove extra axes
+    for i in range(n, len(axes)):
+        fig.delaxes(axes[i])
+
+    # Create a single legend for the entire figure
+    if class_var and handles:
+        fig.legend(handles[1:], labels[1:], title='Class', bbox_to_anchor=(1.05, 0.5), loc='center left')
+
+    plt.tight_layout(rect=[0, 0, 0.85, 1])
+    plt.show()
+
+
+loglog_plot_with_kde(data, class_var='company_vertical')
 
 
 def calculate_and_plot_gini(data):
@@ -813,6 +1155,78 @@ def pca(data):
 
 pca(data)
 
+#%% Factor analysis
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.decomposition import FactorAnalysis
+
+# Function to format label
+def format_label(label):
+    return ' '.join([word.capitalize() for word in label.split('_')])
+
+def factor_analysis(data):
+    import pandas as pd
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    from sklearn.decomposition import FactorAnalysis
+    
+    # Drop specified columns
+    drop_columns = ['mrr_latest', 'transcription_hours_total', 'seats_latest', 'duration']
+    filtered_data = data.drop(columns=drop_columns, errors='ignore')
+    
+    # Drop constant and non-numeric columns
+    filtered_data = filtered_data.select_dtypes(include=['number']).loc[:, filtered_data.nunique() > 1]
+    
+    # Rename columns to 'Title Case' without underscores
+    renamed_columns = {col: format_label(col) for col in filtered_data.columns}
+    filtered_data.rename(columns=renamed_columns, inplace=True)
+    
+    # Apply Factor Analysis
+    fa = FactorAnalysis(n_components=10, rotation = "varimax")
+    fa_result = fa.fit_transform(filtered_data)
+    
+    # Loadings Matrix
+    loadings = pd.DataFrame(fa.components_, columns=filtered_data.columns)
+    
+    # Scree Plot
+    plt.figure(figsize=(10, 5))
+    explained_variance = np.var(fa_result, axis=0)
+    sns.lineplot(x=np.arange(1, len(explained_variance)+1), y=explained_variance, marker='o')
+    plt.xlabel('Factor')
+    plt.ylabel('Eigenvalue')
+    plt.title('Scree Plot')
+    plt.show()
+    
+    # Heatmap of Loadings
+    plt.figure(figsize=(20, 10))
+    sns.heatmap(loadings, annot=True, cmap='coolwarm', fmt='.2f')
+    plt.xlabel('Features')
+    plt.ylabel('Factors')
+    plt.title('Loadings Matrix')
+    plt.show()
+
+    # Contributions of Each Factor
+    contributions = pd.DataFrame(fa_result, columns=[f'Factor_{i}' for i in range(fa_result.shape[1])]).apply(np.var)
+    contributions = contributions.sort_values(ascending=False)
+    
+    # Bar Plot of Contributions
+    plt.figure(figsize=(10, 5))
+    sns.barplot(x=contributions.index, y=contributions.values, palette="RdBu_r")
+    plt.xlabel('Factors')
+    plt.ylabel('Contribution (Variance)')
+    plt.title('Contributions of Each Factor')
+    plt.show()
+    
+    return loadings, explained_variance, contributions
+
+
+# Call the function
+loadings, explained_variance, contributions = factor_analysis(data)
+
 
 
 #%% Feature selection
@@ -1023,20 +1437,17 @@ clustered_data, silhouette_avg, cluster_summary = perform_clustering(data=data, 
 
 #%% Interpretation
 
-def join_and_rename_clusters(left, right, on, cluster_column='Cluster label'):
+def join_and_rename_clusters(left, right, on):
     import pandas as pd
     
     # Perform left join
     joined_data = pd.merge(left, right, how='left', on=on)
-    
-    # Rename cluster labels if the column exists in the data
-    if cluster_column in joined_data.columns:
-        label_map = {num: chr(65 + num) for num in range(26)}  # 65 is the ASCII value for 'A'
-        joined_data[cluster_column] = joined_data[cluster_column].map(label_map)
+
     
     return joined_data
 
-join_and_rename_clusters(clustered_data, workspace_data, 'workspace_id', cluster_column='Cluster label')
+joined_data = join_and_rename_clusters(data, workspace_data, 'workspace_id', cluster_column='Cluster label')
+decimated_data = join_and_rename_clusters(decimated_data, workspace_data, 'workspace_id')
 
 
 import matplotlib.pyplot as plt
@@ -1099,6 +1510,57 @@ def plot_clusters_rotated(data, cluster_variable):
 # Call the function with example data
 plot_clusters_rotated(joined, 'Cluster label')
 
+#%% Hierarchical
+
+import pandas as pd
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+def hierarchical_model(data):
+    # Make a deep copy to avoid warnings
+    data = data.copy(deep=True)
+    
+    # Drop rows with missing values in key columns
+    data.dropna(subset=['mrr_latest', 'seats_latest'] + [col for col in data.columns if col.endswith('_rate')], inplace=True)
+    
+    # Create the dependent variable 'mrr_user'
+    data['mrr_user'] = data['mrr_latest'] / data['seats_latest']
+    
+    # Identify variables ending in '_rate'
+    rate_vars = [col for col in data.columns if col.endswith('_rate')]
+    
+    # Create the formula for the mixed linear model
+    formula = 'mrr_user ~ ' + ' + '.join(rate_vars)
+    
+    try:
+        # Fit the model
+        model = smf.mixedlm(formula, data, groups=data['workspace_id'])
+        result = model.fit()
+        
+        # Diagnostic plots
+        # 1. Residuals vs Fitted values
+        plt.figure(figsize=(10, 6))
+        sns.residplot(x=result.fittedvalues, y=result.resid, lowess=True)
+        plt.xlabel('Fitted values')
+        plt.ylabel('Residuals')
+        plt.title('Residuals vs Fitted')
+        plt.show()
+        
+        # 2. Q-Q Plot
+        sm.qqplot(result.resid, fit=True, line='45')
+        plt.title('Normal Q-Q')
+        plt.show()
+
+        print(result.summary())
+        
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+# Assume joined_data is your DataFrame
+# Call the function
+model_result = hierarchical_model(joined_data)
 
 #%% Adoption
 
