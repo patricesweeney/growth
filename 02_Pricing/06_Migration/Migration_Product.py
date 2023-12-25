@@ -55,19 +55,7 @@ data_checks(data)
 
 #%% Choose varibales
 
-def declare_variables(data, package, p1, v1, p2):
-    # Select the specified columns and create a new DataFrame
-    # Rename the columns to p1, v1, and v2
-    new_data = data[[package, p1, v1, p2]].rename(columns={p1: 'p1', v1: 'v1', p2: 'p2'})
-
-    return new_data
-
-# Example usage
-data = declare_variables(data, 'product', 'arpu', 'seats_latest', 'new_arpu')
-
-
-
-
+n
 #%% Summarise
 
 def summarise_numbers(data):
