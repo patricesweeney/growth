@@ -16,61 +16,15 @@ def import_data():
 data = import_data()
 
 
+
+
 #%% Date to index
 
-def date_to_time(data):
-    import pandas as pd
-
-    # Function to check if a column is date-formatted
-    def is_date_column(col):
-        try:
-            pd.to_datetime(data[col])
-            return True
-        except:
-            return False
-
-    # Find the first date-formatted column
-    date_column = None
-    for col in data.columns:
-        if is_date_column(col):
-            date_column = col
-            break
-
-    if date_column is None:
-        raise ValueError("No date-formatted column found in the dataframe.")
-
-    # Sort the dataframe by the date column
-    data_sorted = data.sort_values(by=date_column)
-
-    # Map each unique date to an ascending integer
-    unique_dates = pd.to_datetime(data_sorted[date_column]).dt.date.unique()
-    date_to_integer = {date: i+1 for i, date in enumerate(unique_dates)}
-
-    # Create a new 'time' column based on the date-to-integer mapping
-    data_sorted['time'] = data_sorted[date_column].apply(lambda x: date_to_integer[pd.to_datetime(x).date()])
-
-    return data_sorted
-
-
-
-data = date_to_time(data)
-
-#%% Add 'other' choices
-
-
-def add_other_choices(data, paid_conversion_rate):
+def add_nopurchase_option(data, paid_conversion_rate):
     import pandas as pd
     import numpy as np
     import uuid
-
-    """
-    Add rows representing 'Other' choices to the dataset. Assign unique UUIDs
-    as workspace_id to the new rows while keeping the original workspace_id for existing rows.
-
-    :param data: pandas DataFrame containing the original data
-    :param paid_conversion_rate: float, the paid conversion rate (e.g., 0.04 for 4%)
-    :return: pandas DataFrame with additional rows for 'Other' choices
-    """
+    
     # Calculate the number of 'Other' rows to add
     current_count = len(data)
     total_count_needed = current_count / paid_conversion_rate
@@ -78,9 +32,9 @@ def add_other_choices(data, paid_conversion_rate):
 
     # Create a DataFrame for 'Other' choices
     other_data = pd.DataFrame({
-        'products_latest': ['Other'] * other_count,
-        'seat_price': [0] * other_count,
-        'seats_latest': [1] * other_count,
+        'product': ['Other'] * other_count,
+        'price': [0] * other_count,
+        'volume': [1] * other_count,
         # Add other columns as None
     })
 
@@ -90,14 +44,21 @@ def add_other_choices(data, paid_conversion_rate):
             other_data[col] = np.nan
 
     # Generate unique UUIDs for the new rows
-    other_data['workspace_id'] = [str(uuid.uuid4()) for _ in range(other_count)]
+    other_data['id'] = [str(uuid.uuid4()) for _ in range(other_count)]
 
     # Append the 'Other' data to the original data
     updated_data = pd.concat([data, other_data], ignore_index=True)
 
+    # Print the number of rows and the number of unique IDs
+    print(f"Total number of rows: {len(updated_data)}")
+    print(f"Number of unique IDs: {updated_data['id'].nunique()}")
+
     return updated_data
 
-data = add_other_choices(data, 0.04)
+# Example usage
+data = add_nopurchase_option(data, 0.04)
+data.head()
+data.tail()
 
 
 
@@ -105,8 +66,7 @@ data = add_other_choices(data, 0.04)
 #%% Double up volume as repeated choices with unavailable other choices
 
 
-
-def double_up_volume(data, volume):
+def duplicate_volume_choices(data):
     import pandas as pd
     # Ensure the original data has the 'available' column set to 1
     data['available'] = 1
@@ -116,7 +76,7 @@ def double_up_volume(data, volume):
 
     # Iterate over each row
     for index, row in data.iterrows():
-        row_volume = row[volume]
+        row_volume = row['volume']  # Directly reference the 'volume' column
         
         # Check if volume is greater than 1
         if row_volume > 1:
@@ -129,41 +89,44 @@ def double_up_volume(data, volume):
     # Combine the original data with the duplicated rows
     return pd.concat([data, result_df], ignore_index=True)
 
-# Example usage
-# data = ... (Your DataFrame with 'seats_latest' column)
-# data = double_up_volume(data, 'seats_latest')
 
-
-data = double_up_volume(data = data, volume = 'seats_latest')
+data = duplicate_volume_choices(data)
+data.head()
+print(f"Total number of rows: {len(data)}")
 
 
 #%% Create alternatives
 
     
-def create_alternatives(data, choice, price, volume):
+def declare_alternatives(data):
     import pandas as pd
-    
-    # Rename the column specified in the choice argument to 'choice'
-    data = data.rename(columns={choice: 'choice'})
-    
+
+    # Fixed column names
+    choice_column = 'product'
+    price_column = 'price'
+    volume_column = 'volume'
+
+    # Rename the 'product' column to 'choice'
+    data = data.rename(columns={choice_column: 'choice'})
+
     # Calculate the average price for each choice
-    avg_price = data.groupby('choice')[price].mean()
-    
+    avg_price = data.groupby('choice')[price_column].mean()
+
     # Get the unique choices
     choices = data['choice'].unique()
-    
+
     # Create a price and volume column for each choice
     for c in choices:
-        data[f'price_{c}'] = data.apply(lambda x: x[price] if x['choice'] == c else avg_price[c], axis=1)
-        data[f'volume_{c}'] = data[volume]
-        
+        data[f'price_{c}'] = data.apply(lambda x: x[price_column] if x['choice'] == c else avg_price[c], axis=1)
+        data[f'volume_{c}'] = data[volume_column]
+
     # Drop the original price and volume columns
-    data = data.drop(columns=[volume])
-    
-    
+    data = data.drop(columns=[price_column, volume_column])
+
     return data
 
-data = create_alternatives(data = data, choice = 'products_latest', price = 'seat_price', volume = 'seats_latest')
+# Example usage
+data = declare_alternatives(data)
 
 
 
@@ -171,9 +134,14 @@ data = create_alternatives(data = data, choice = 'products_latest', price = 'sea
 
 #Each price metric gets its own price and volume leading into the choice
 
-def transform(data, id_col, choice):
+def make_data_long(data):
     from xlogit.utils import wide_to_long
-    
+    import uuid
+
+    # Fixed column names
+    id_col = 'id'
+    choice = 'choice'
+
     # Get unique alternatives from the choice column
     alt_list = data[choice].unique().tolist()
 
@@ -181,9 +149,211 @@ def transform(data, id_col, choice):
     data_long = wide_to_long(data, id_col=id_col, alt_list=alt_list,
                              varying=['price', 'volume'], alt_name='alt', sep='_', alt_is_prefix=False)
 
+    # Assign a unique identifier to each row in the workspace_id column
+    data_long[id_col] = [str(uuid.uuid4()) for _ in range(len(data_long))]
+
     return data_long
 
-data_long =  transform(data = data, id_col = 'workspace_id', choice = 'choice')
+# Example usage
+data = make_data_long(data)
+
+
+
+#%%
+
+import pandas as pd
+
+def standardize_price(data):
+    if 'price' not in data.columns:
+        raise ValueError("The 'price' column is not found in the data.")
+
+    mean_price = data['price'].mean()
+    std_price = data['price'].std()
+
+    # Avoid division by zero in case of constant price
+    if std_price == 0:
+        raise ValueError("Standard deviation of 'price' is zero. Cannot standardize a constant variable.")
+
+    data['price'] = (data['price'] - mean_price) / std_price
+    return data
+
+data = standardize_price(data)
+
+
+
+
+#%% Do it in torch coice
+
+
+# =============================================================================
+# Import shit
+# =============================================================================
+
+import torch
+import numpy as np
+import pandas as pd
+from torch_choice.data import ChoiceDataset, JointDataset, utils
+from torch_choice.model.nested_logit_model import NestedLogitModel
+from torch_choice import run
+
+# Ignore warnings for cleaner outputs
+import warnings
+warnings.filterwarnings("ignore")
+
+# Print torch version
+print(torch.__version__)
+
+# Set device based on CUDA availability
+if torch.cuda.is_available():
+    print(f'CUDA device used: {torch.cuda.get_device_name()}')
+    DEVICE = 'cuda'
+else:
+    print('Running tutorial on CPU')
+    DEVICE = 'cpu'
+
+
+
+#%% Create a chosen column
+
+def create_chosen_column(data):
+    # Ensure the necessary columns exist
+    if 'choice' not in data.columns or 'alt' not in data.columns:
+        raise ValueError("Required columns 'choice' or 'alt' are missing")
+
+    # Rename columns
+    data = data.rename(columns={'choice': 'temp_chosen', 'alt': 'choice'})
+
+    # Create the 'chosen' column with True if 'choice' equals 'temp_chosen', else False
+    data['chosen'] = data['choice'] == data['temp_chosen']
+
+    # Drop the temporary column
+    data = data.drop(columns=['temp_chosen'])
+
+    return data
+
+# Usage example:
+data = create_chosen_column(data)
+
+
+
+#%%
+
+def prepare_torch_data(data):
+    import torch
+    import numpy as np
+    import pandas as pd
+    from torch_choice.data import ChoiceDataset, JointDataset, utils
+    from torch_choice.model.nested_logit_model import NestedLogitModel
+    from torch_choice import run
+    
+    # Ignore warnings for cleaner outputs
+    import warnings
+    warnings.filterwarnings("ignore")
+    
+    # Print torch version
+    print(torch.__version__)
+    
+    # Set device based on CUDA availability
+    if torch.cuda.is_available():
+        print(f'CUDA device used: {torch.cuda.get_device_name()}')
+        DEVICE = 'cuda'
+    else:
+        print('Running tutorial on CPU')
+        DEVICE = 'cpu'
+
+    # Count of choices
+    print(data['choice'].value_counts())
+
+    # Choice information
+    item_index = data[data['chosen'] == True].sort_values(by='id')['choice'].reset_index(drop=True)
+    item_names = data['choice'].unique().tolist()
+    num_items = data['choice'].nunique()
+
+    # Encode choices
+    encoder = dict(zip(item_names, range(num_items)))
+    item_index = item_index.map(lambda x: encoder[x])
+    item_index = torch.LongTensor(item_index)
+
+    # Nesting
+    nest_dataset = ChoiceDataset(item_index=item_index.clone()).to(DEVICE)
+
+    # Set up regressors / X variables
+    duplicates = data[data.duplicated(subset=['id', 'choice'], keep=False)]
+    if not duplicates.empty:
+        print(duplicates)
+
+    item_feat_cols = ['price']
+    price_obs = utils.pivot3d(data, dim0='id', dim1='choice', values=item_feat_cols)
+
+    print(price_obs.shape)
+
+    item_dataset = ChoiceDataset(item_index=item_index, price_obs=price_obs).to(DEVICE)
+
+    # Create final dataset
+    dataset = JointDataset(nest=nest_dataset, item=item_dataset)
+    print(dataset)
+    
+    return dataset
+    
+    
+
+    
+
+# Usage example:
+dataset = prepare_torch_data(data)
+
+
+nest_to_item = {0: ['Starter', 'Team', 'Business', 'Enterprise'],
+                1: ['Other']}
+
+item_index = data[data['chosen'] == True].sort_values(by='id')['choice'].reset_index(drop=True)
+item_names = data['choice'].unique().tolist()
+num_items = data['choice'].nunique()
+
+# Encode choices
+encoder = dict(zip(item_names, range(num_items)))
+
+# encode items to integers.
+for k, v in nest_to_item.items():
+    v = [encoder[item] for item in v]
+    nest_to_item[k] = sorted(v)
+
+print(nest_to_item)
+
+
+
+
+
+
+# =============================================================================
+# Model
+# =============================================================================
+
+model = NestedLogitModel(nest_to_item=nest_to_item,
+                          nest_coef_variation_dict={},
+                          nest_num_param_dict={},
+                          item_coef_variation_dict={'price_obs': 'constant'},
+                          item_num_param_dict={'price_obs': 1},
+                          shared_lambda=True)
+
+model = NestedLogitModel(nest_to_item=nest_to_item,
+                         nest_formula='',
+                         item_formula='(price_obs|constant)',
+                         dataset=dataset,
+                         shared_lambda=True)
+
+model = model.to(DEVICE)
+
+print(model)
+
+run(model, dataset, num_epochs=100, model_optimizer="LBFGS")
+
+
+
+
+#%% 
+#Other shit
+
 
 
 
@@ -485,156 +655,3 @@ def optimise(data, choice, model, market_size):
 optimise(data, choice='choice', model=model, market_size=20000)
 
 
-#%% Do it in torch coice
-
-
-# =============================================================================
-# Import shit
-# =============================================================================
-
-import torch
-import numpy as np
-import pandas as pd
-from torch_choice.data import ChoiceDataset, JointDataset, utils
-from torch_choice.model.nested_logit_model import NestedLogitModel
-from torch_choice import run
-
-# Ignore warnings for cleaner outputs
-import warnings
-warnings.filterwarnings("ignore")
-
-# Print torch version
-print(torch.__version__)
-
-# Set device based on CUDA availability
-if torch.cuda.is_available():
-    print(f'CUDA device used: {torch.cuda.get_device_name()}')
-    DEVICE = 'cuda'
-else:
-    print('Running tutorial on CPU')
-    DEVICE = 'cpu'
-
-
-
-#%% Create a chosen column
-
-import pandas as pd
-
-def create_chosen_column(data_long):
-    # Ensure the necessary columns exist
-    if 'choice' not in data_long.columns or 'alt' not in data_long.columns:
-        raise ValueError("Required columns 'choice' or 'alt' are missing")
-
-    # Rename columns
-    data_long = data_long.rename(columns={'choice': 'temp_chosen', 'alt': 'choice'})
-
-    # Create the 'chosen' column with True if 'choice' equals 'temp_chosen', else False
-    data_long['chosen'] = data_long['choice'] == data_long['temp_chosen']
-
-    # Drop the temporary column
-    data_long = data_long.drop(columns=['temp_chosen'])
-
-    return data_long
-
-data_long = create_chosen_column(data_long)
-
-
-#%%
-
-
-# =============================================================================
-# Count of choices
-# =============================================================================
-
-data['choice'].value_counts()
-
-
-# =============================================================================
-# Choice information
-# =============================================================================
-
-item_index = data_long[data_long['chosen'] == True].sort_values(by='workspace_id')['choice'].reset_index(drop=True)
-
-item_names = data_long['choice'].unique().tolist()
-
-num_items = data_long['choice'].nunique()
-
-
-# =============================================================================
-# Encode choices
-# =============================================================================
-
-encoder = dict(zip(item_names, range(num_items)))
-item_index = item_index.map(lambda x: encoder[x])
-item_index = torch.LongTensor(item_index)
-
-
-# =============================================================================
-# Nesting 
-# =============================================================================
-
-# nest feature: no nest feature, all features are item-level.
-nest_dataset = ChoiceDataset(item_index=item_index.clone()).to(DEVICE)
-
-
-# =============================================================================
-# Set up regressors / X variables
-# =============================================================================
-
-item_feat_cols = ['price']
-
-price_obs = utils.pivot3d(data_long, dim0='workspace_id', dim1='choice', values=item_feat_cols)
-
-price_obs.shape
-
-item_dataset = ChoiceDataset(item_index=item_index, price_obs=price_obs).to(DEVICE)
-
-
-# =============================================================================
-# Create final dataset
-# =============================================================================
-
-dataset = JointDataset(nest=nest_dataset, item=item_dataset)
-print(dataset)
-
-
-# =============================================================================
-# Declare nesting
-# =============================================================================
-
-nest_to_item = {0: ['gcc', 'ecc', 'erc', 'hpc'],
-                1: ['gc', 'ec', 'er']}
-
-# encode items to integers.
-for k, v in nest_to_item.items():
-    v = [encoder[item] for item in v]
-    nest_to_item[k] = sorted(v)
-
-print(nest_to_item)
-
-
-# =============================================================================
-# Model
-# =============================================================================
-
-model = NestedLogitModel(nest_to_item=nest_to_item,
-                         nest_coef_variation_dict={},
-                         nest_num_param_dict={},
-                         item_coef_variation_dict={'price_obs': 'constant'},
-                         item_num_param_dict={'price_obs': 7},
-                         shared_lambda=True)
-
-model = NestedLogitModel(nest_to_item=nest_to_item,
-                         nest_formula='',
-                         item_formula='(price_obs|constant)',
-                         dataset=dataset,
-                         shared_lambda=True)
-
-model = model.to(DEVICE)
-
-print(model)
-
-run(model, dataset, num_epochs=1000, model_optimizer="LBFGS")
-
-
-#%% 
