@@ -55,18 +55,59 @@ def date_to_time(data):
 
 data = date_to_time(data)
 
-#%% Create available column for choice of product
+#%% Add 'other' choices
 
-def add_availability(data):
-    # Create a new column 'available' and set all its values to 1
-    data['available'] = 1
+
+def add_other_choices(data, paid_conversion_rate):
+    import pandas as pd
+    import numpy as np
+    import uuid
+
+    """
+    Add rows representing 'Other' choices to the dataset. Assign unique UUIDs
+    as workspace_id to the new rows while keeping the original workspace_id for existing rows.
+
+    :param data: pandas DataFrame containing the original data
+    :param paid_conversion_rate: float, the paid conversion rate (e.g., 0.04 for 4%)
+    :return: pandas DataFrame with additional rows for 'Other' choices
+    """
+    # Calculate the number of 'Other' rows to add
+    current_count = len(data)
+    total_count_needed = current_count / paid_conversion_rate
+    other_count = int(total_count_needed - current_count)
+
+    # Create a DataFrame for 'Other' choices
+    other_data = pd.DataFrame({
+        'products_latest': ['Other'] * other_count,
+        'seat_price': [0] * other_count,
+        'seats_latest': [1] * other_count,
+        # Add other columns as None
+    })
+
+    # Add other columns as None
+    for col in data.columns:
+        if col not in other_data:
+            other_data[col] = np.nan
+
+    # Generate unique UUIDs for the new rows
+    other_data['workspace_id'] = [str(uuid.uuid4()) for _ in range(other_count)]
+
+    # Append the 'Other' data to the original data
+    updated_data = pd.concat([data, other_data], ignore_index=True)
+
+    return updated_data
+
+data = add_other_choices(data, 0.04)
+
+
 
 
 #%% Double up volume as repeated choices with unavailable other choices
 
-import pandas as pd
+
 
 def double_up_volume(data, volume):
+    import pandas as pd
     # Ensure the original data has the 'available' column set to 1
     data['available'] = 1
 
@@ -199,27 +240,6 @@ constant_check(data_long, choice='choice')
 
 
 
-
-def transform_log_variables(data_long):
-    import numpy as np
-
-    # Function to add a tiny noise to a variable
-    def add_noise(series):
-        noise = np.random.uniform(-0.0001, 0.0001, series.shape)
-        return series + noise
-
-    # Add noise and then apply natural log transformation to the 'price' column
-    data_long['price'] = np.log(add_noise(data_long['price']))
-
-    # Add noise and then apply natural log transformation to the 'volume' column
-    data_long['volume'] = np.log(add_noise(data_long['volume']))
-
-    return data_long
-
-
-
-
-data_long = transform_log_variables(data_long)
 
 #%%
 #Estimate model
@@ -367,8 +387,8 @@ def simulator(data, choice, model, market_size):
 
 
 
-
-simulator(data, choice = 'choice', model = model, market_size = 15186)
+    
+simulator(data, choice = 'choice', model = model, market_size = 74350)
 
 
 #%% Compare with distribution of seat choices
@@ -398,3 +418,223 @@ def test_model(data, choice):
 
 test_model(data, choice = 'choice')
 
+
+#%% Revenue optimal prices
+
+import pandas as pd
+import numpy as np
+from scipy.optimize import minimize
+
+def optimise(data, choice, model, market_size):
+    # Extract price coefficient from the xlogit model
+    price_coef = model.coeff_[0]
+    
+    # Calculate average prices for each choice
+    avg_prices = data.groupby(choice)['seat_price'].mean()
+    
+    # Define a broad range of prices for optimization
+    price_ranges = {c: (p * 0.5, p * 2) for c, p in avg_prices.items()}  # Price range for each product
+    
+    def demand_function(prices):
+        utilities = np.exp(price_coef * pd.Series(prices))
+        probabilities = utilities / utilities.sum()
+        return probabilities * market_size
+    
+    def revenue_function(prices):
+        demands = demand_function(prices)
+        revenue = np.sum([prices[i] * demands[i] for i in range(len(prices))])
+        return -revenue  # Negative revenue for maximization
+    
+    def jacobian(prices):
+        demands = demand_function(prices)
+        jacobian = np.zeros(len(prices))
+        for i in range(len(prices)):
+            partial_sum = np.sum([prices[j] * (np.exp(price_coef * prices[j]) / np.exp(price_coef * prices).sum()) * market_size for j in range(len(prices)) if j != i])
+            jacobian[i] = demands[i] + prices[i] * price_coef * demands[i] + partial_sum
+        return -jacobian  # Negative for maximization
+    
+    # Initial guess for prices - starting with average prices
+    initial_prices = avg_prices.values
+    bounds = list(price_ranges.values())  # Bounds for prices
+    
+    # Perform optimization
+    result = minimize(revenue_function, initial_prices, jac=jacobian, bounds=bounds, method='L-BFGS-B')
+    
+    if result.success:
+        optimal_prices = result.x
+        optimal_revenue = -revenue_function(optimal_prices)
+        optimal_demands = demand_function(optimal_prices)
+        optimal_probabilities = optimal_demands / market_size
+
+        print("Optimal Prices:")
+        for c, price in zip(avg_prices.index, optimal_prices):
+            print(f"{c}: ${price:.2f}")
+        print("Total Optimal Revenue: ${:,.2f}".format(optimal_revenue))
+        
+        print("\nChoice Probabilities at Optimal Prices:")
+        for c, prob in zip(avg_prices.index, optimal_probabilities):
+            print(f"{c}: {prob:.2f}")
+        print("Sum of Probabilities: {:.2f}".format(optimal_probabilities.sum()))
+    else:
+        print("Optimization failed.")
+        optimal_prices = None
+        optimal_revenue = None
+        optimal_probabilities = None
+
+# Example usage
+optimise(data, choice='choice', model=model, market_size=20000)
+
+
+#%% Do it in torch coice
+
+
+# =============================================================================
+# Import shit
+# =============================================================================
+
+import torch
+import numpy as np
+import pandas as pd
+from torch_choice.data import ChoiceDataset, JointDataset, utils
+from torch_choice.model.nested_logit_model import NestedLogitModel
+from torch_choice import run
+
+# Ignore warnings for cleaner outputs
+import warnings
+warnings.filterwarnings("ignore")
+
+# Print torch version
+print(torch.__version__)
+
+# Set device based on CUDA availability
+if torch.cuda.is_available():
+    print(f'CUDA device used: {torch.cuda.get_device_name()}')
+    DEVICE = 'cuda'
+else:
+    print('Running tutorial on CPU')
+    DEVICE = 'cpu'
+
+
+
+#%% Create a chosen column
+
+import pandas as pd
+
+def create_chosen_column(data_long):
+    # Ensure the necessary columns exist
+    if 'choice' not in data_long.columns or 'alt' not in data_long.columns:
+        raise ValueError("Required columns 'choice' or 'alt' are missing")
+
+    # Rename columns
+    data_long = data_long.rename(columns={'choice': 'temp_chosen', 'alt': 'choice'})
+
+    # Create the 'chosen' column with True if 'choice' equals 'temp_chosen', else False
+    data_long['chosen'] = data_long['choice'] == data_long['temp_chosen']
+
+    # Drop the temporary column
+    data_long = data_long.drop(columns=['temp_chosen'])
+
+    return data_long
+
+data_long = create_chosen_column(data_long)
+
+
+#%%
+
+
+# =============================================================================
+# Count of choices
+# =============================================================================
+
+data['choice'].value_counts()
+
+
+# =============================================================================
+# Choice information
+# =============================================================================
+
+item_index = data_long[data_long['chosen'] == True].sort_values(by='workspace_id')['choice'].reset_index(drop=True)
+
+item_names = data_long['choice'].unique().tolist()
+
+num_items = data_long['choice'].nunique()
+
+
+# =============================================================================
+# Encode choices
+# =============================================================================
+
+encoder = dict(zip(item_names, range(num_items)))
+item_index = item_index.map(lambda x: encoder[x])
+item_index = torch.LongTensor(item_index)
+
+
+# =============================================================================
+# Nesting 
+# =============================================================================
+
+# nest feature: no nest feature, all features are item-level.
+nest_dataset = ChoiceDataset(item_index=item_index.clone()).to(DEVICE)
+
+
+# =============================================================================
+# Set up regressors / X variables
+# =============================================================================
+
+item_feat_cols = ['price']
+
+price_obs = utils.pivot3d(data_long, dim0='workspace_id', dim1='choice', values=item_feat_cols)
+
+price_obs.shape
+
+item_dataset = ChoiceDataset(item_index=item_index, price_obs=price_obs).to(DEVICE)
+
+
+# =============================================================================
+# Create final dataset
+# =============================================================================
+
+dataset = JointDataset(nest=nest_dataset, item=item_dataset)
+print(dataset)
+
+
+# =============================================================================
+# Declare nesting
+# =============================================================================
+
+nest_to_item = {0: ['gcc', 'ecc', 'erc', 'hpc'],
+                1: ['gc', 'ec', 'er']}
+
+# encode items to integers.
+for k, v in nest_to_item.items():
+    v = [encoder[item] for item in v]
+    nest_to_item[k] = sorted(v)
+
+print(nest_to_item)
+
+
+# =============================================================================
+# Model
+# =============================================================================
+
+model = NestedLogitModel(nest_to_item=nest_to_item,
+                         nest_coef_variation_dict={},
+                         nest_num_param_dict={},
+                         item_coef_variation_dict={'price_obs': 'constant'},
+                         item_num_param_dict={'price_obs': 7},
+                         shared_lambda=True)
+
+model = NestedLogitModel(nest_to_item=nest_to_item,
+                         nest_formula='',
+                         item_formula='(price_obs|constant)',
+                         dataset=dataset,
+                         shared_lambda=True)
+
+model = model.to(DEVICE)
+
+print(model)
+
+run(model, dataset, num_epochs=1000, model_optimizer="LBFGS")
+
+
+#%% 
