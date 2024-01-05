@@ -6,12 +6,12 @@ data {
 }
 
 parameters {
-    array[J] real alpha;  // Intercepts for each outcome
-    vector<upper=0>[N] beta;  // Coefficients for price for each observation, constrained to be negative
+    vector[J] alpha;  // Intercept for each potential outcome
+    real<upper=0> beta;  // Single coefficient for price, constrained to be negative
     real mu_alpha;  // Global mean for alpha distribution
     real<lower=0> sigma_alpha;  // Global standard deviation for alpha distribution
-    real<upper=0> mu_beta;  // Mean for beta distribution, constrained to be negative
-    real<lower=0> sigma_beta;  // Standard deviation for beta distribution
+    real mu_beta;  // Global mean for beta distribution
+    real<lower=0> sigma_beta;  // Global standard deviation for beta distribution
 }
 
 model {
@@ -21,17 +21,17 @@ model {
     mu_beta ~ normal(0, 5);
     sigma_beta ~ inv_gamma(2, 0.5);
 
-    // Priors for varying intercepts and individual betas
+    // Priors for varying intercepts
     alpha ~ normal(mu_alpha, sigma_alpha);
-    for (n in 1:N) {
-        beta[n] ~ normal(mu_beta, sigma_beta);  // Prior for each individual beta[n]
-    }
+
+    // Single beta prior
+    beta ~ normal(mu_beta, sigma_beta);  // Adjust the prior as needed
 
     // Likelihood
     for (n in 1:N) {
         vector[J] utilities;
         for (j in 1:J) {
-            utilities[j] = alpha[j] + beta[n] * price[n];  // Use individual-specific beta[n]
+            utilities[j] = alpha[j] + beta * price[n];  // Use the single beta
         }
         y[n] ~ categorical_logit(utilities);
     }
@@ -39,18 +39,14 @@ model {
 
 generated quantities {
     matrix[N, J] choice_probabilities;  // Probabilities for each choice over all observations
-    vector[J] alpha_out = alpha;  // Saving the alpha parameters
-    vector[N] beta_out = beta;  // Saving the beta parameters
-    real mu_alpha_out = mu_alpha;  // Saving the mu_alpha hyperparameter
-    real sigma_alpha_out = sigma_alpha;  // Saving the sigma_alpha hyperparameter
-    real mu_beta_out = mu_beta;  // Saving the mu_beta hyperparameter
-    real sigma_beta_out = sigma_beta;  // Saving the sigma_beta hyperparameter
 
     for (n in 1:N) {
         vector[J] utilities;
         for (j in 1:J) {
-            utilities[j] = alpha[j] + beta[n] * price[n];  // Use individual-specific beta[n]
+            utilities[j] = alpha[j] + beta * price[n];
         }
         choice_probabilities[n] = to_row_vector(softmax(utilities));
     }
+    // Direct output of alpha and beta parameters
+    // No need for additional variables like saved_alpha or saved_beta
 }
